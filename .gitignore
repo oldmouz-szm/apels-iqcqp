@@ -1,0 +1,17 @@
+/.venv/
+/build/
+/data/
+/results/
+/output/
+.cache/
+__pycache__/
+*.pyc
+*.log
+*.jsonl
+*.checkpoint
+*.lifecycle
+*.request
+*.request.tmp
+*.unverified-final
+*.tmp
+/native/upstream.patch
