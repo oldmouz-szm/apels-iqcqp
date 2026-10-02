@@ -5,13 +5,13 @@ import hashlib
 import math
 import random
 import time
-from .scheduler import Scheduler
+from .tasks import TaskBuilder
 
 ARMS = ('direction', 'epsilon', 'pls')
 REWARD_VERSION = 'full-archive-fixed-hv-exact2d-v1'
 R2_REWARD_VERSION = 'full-archive-fixed-asf-r2-exact-v1'
 
-class AdaptiveScheduler(Scheduler):
+class AdaptiveScheduler(TaskBuilder):
     def __init__(self, n, seed=1, config=None):
         config = config or {}
         version = config.get('adaptive', {}).get('reward_version', REWARD_VERSION)

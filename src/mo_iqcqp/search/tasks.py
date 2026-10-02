@@ -1,34 +1,25 @@
-"""Fixed measured-time shares with gap/grid epsilon scheduling."""
+"""Shared task construction for adaptive direction, epsilon and PLS arms."""
+from abc import ABC, abstractmethod
 import math
 import random
 import time
 from fractions import Fraction as F
 
-class Scheduler:
+class TaskBuilder(ABC):
     def __init__(self,n,seed=1,config=None):
         self.n=n;self.rng=random.Random(seed);self.turn=0;self.direction_turn=0;self.epsilon_turn=0;self.unit_cursor=0;self.feasibility_turn=0;self.feasibility_unit_cursor=0;self.version=0;self.last_scale=None
         self.elapsed={'direction':0.,'epsilon':0.,'pls':0.,'feasibility':0.}
-        self.eligible=();self.baseline=dict(self.elapsed)
-        self.shares={'direction':.3,'epsilon':.5,'pls':.2}
         self.attempts={}
         config=config or {};self.bootstrap_strategy=config.get('bootstrap_strategy','legacy_v1');self.rho=float(config.get('rho',.001))
-        if 'shares' in config:
-            shares=config['shares']
-            if set(shares)!=set(self.shares) or any(not math.isfinite(v) or v<0 for v in shares.values()) or not 0<sum(shares.values())<float('inf'):raise ValueError('Invalid time shares')
-            self.shares=(dict(shares) if config.get('configuration_schema') in ('apels-effective-v1','apels-effective-v2')
-                         else {k:float(v)/sum(shares.values()) for k,v in shares.items()})
     def next(self,archive,reserved=None,deadline=float('inf')):
         points=archive.work(deadline);n=self.n;t=self.turn;self.turn+=1
         # Epsilon needs two distinct full-archive witnesses, even at work_capacity=1.
         if len(points)==1 and len(archive.points)>1:
             points.append(next(p for p in archive.points.values() if p['internal']!=points[0]['internal']))
         eligible=self._eligible(points)
-        if eligible!=self.eligible:
-            # No debt accrues while a class cannot run. Keep lifetime totals for reporting.
-            self.eligible=eligible;self.baseline=dict(self.elapsed)
         if not eligible:return None
         reserved=reserved or {}
-        kind,effective=self._select(eligible,reserved)
+        kind,_=self._select(eligible,reserved)
         z=[];scale=[]
         for j in range(n):
             if time.monotonic()>=deadline:raise TimeoutError('task construction deadline')
@@ -87,20 +78,15 @@ class Scheduler:
         reason='empty_archive' if not archive.points else 'second_witness' if kind=='feasibility' else None
         if reason and hasattr(self,'last_decision') and self.last_decision is not None:
             self.last_decision['forced_reason']=reason
-        result={'kind':kind,'effective_shares':effective,'weights':weights,'eps':eps,'seed':seed,'z':z,'scale':scale,'scale_version':self.version,'gap':repr(gap_key) if gap_key else None}
+        result={'kind':kind,'weights':weights,'eps':eps,'seed':seed,'z':z,'scale':scale,'scale_version':self.version,'gap':repr(gap_key) if gap_key else None}
         if self.bootstrap_strategy!='legacy_v1' or reason=='second_witness':result['bootstrap_reason']=reason
         if time.monotonic()>=deadline:raise TimeoutError('task construction deadline')
         return result
 
+    @abstractmethod
     def _eligible(self, points):
-        if not points:return ('feasibility',)
-        eligible=tuple(k for k,v in self.shares.items()
-                       if v>0 and (k!='epsilon' or len(points)>=2))
-        # Timed witness acquisition is not an enabled epsilon task or learning arm.
-        return eligible if eligible else ('feasibility',)
+        raise NotImplementedError
 
-    def _select(self, eligible, reserved):
-        kind=min(eligible,key=lambda k:(self.elapsed[k]-self.baseline[k]+reserved.get(k,0))/(self.shares.get(k,1)))
-        total=sum(self.shares.get(k,1) for k in eligible)
-        effective={k:self.shares.get(k,1)/total for k in eligible}
-        return kind,effective
+    @abstractmethod
+    def _select(self, eligible, pending):
+        raise NotImplementedError

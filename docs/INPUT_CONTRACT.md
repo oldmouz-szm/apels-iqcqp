@@ -12,10 +12,10 @@ Objective count consumes source bytes, sparse-term memory, protocol parsing, exa
 
 
 ## Bootstrap compatibility
-LS-IQCQP default bootstrap_strategy=persistent_unit_v2 permits early tentative first-feasible export from the immutable unit-direction task; feasibility_slice_seconds=10 remains the maximum unsuccessful allowance. persistent_unit_v1 and legacy_v1 are explicit compatibility choices. SCIP also supports and defaults to v2; explicit v1 remains available. No new input model class is added. Structure-enhanced initial assignments use the same exact original feasibility and reliable R2 lower-bound checks as ordinary candidates, including when native loading later reaches the deadline.
+LS-IQCQP default bootstrap_strategy=persistent_unit_v2 permits early tentative first-feasible export from the immutable unit-direction task; feasibility_slice_seconds=10 remains the maximum unsuccessful allowance. persistent_unit_v1 and legacy_v1 are explicit compatibility choices. No new input model class is added. Structure-enhanced initial assignments use the same exact original feasibility and reliable R2 lower-bound checks as ordinary candidates, including when native loading later reaches the deadline.
 
-## v10 saved-run and request contract
+## v11 saved-run and request contract
 
-The output group includes a frozen `.request` sidecar; only new output paths are accepted. Final/checkpoint content digests and exact original-model sample checks protect queue reuse. Model metadata unavailable before parsing is explicitly null on supervisor failure. Run/queue identity is v10, so older outputs cannot be silently reused. See BATCH_SAFETY_SPEC.md for status codes, interruption recovery and resource limits. Objective number remains any finite m>=2 subject to actual resources; the file transport removes the argv length limitation.
+The output group includes a frozen `.request` sidecar; only new output paths are accepted. Final/checkpoint content digests and exact original-model sample checks protect queue reuse. Model metadata unavailable before parsing is explicitly null on supervisor failure. Run/queue identity is v11, so older outputs cannot be silently reused. See BATCH_SAFETY_SPEC.md for status codes, interruption recovery and resource limits. Objective number remains any finite m>=2 subject to actual resources; the file transport removes the argv length limitation.
 
-SCIP Generic supports direction, epsilon and finite integer-neighborhood PLS. Structure-enhanced requires the LS backend and is rejected before search for SCIP. Queue preflight accepts only regular files within the configured byte cap. See ENGINEERING_SPEC.md for deadline and resource semantics.
+LS-IQCQP Generic supports direction, epsilon and finite integer-neighborhood PLS. Structure-enhanced requires an exactly recognized structure. Queue preflight accepts only regular files within the configured byte cap. See ENGINEERING_SPEC.md for deadline and resource semantics.

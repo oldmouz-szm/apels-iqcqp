@@ -11,7 +11,7 @@ from mo_iqcqp.backends.native import NativeSession
 
 
 class WorkerPool:
-    def __init__(self, model, count, deadline, seed, structure=None, initial=None, input_limits=None,backend='ls_iqcqp'):
+    def __init__(self, model, count, deadline, seed, structure=None, initial=None, input_limits=None):
         self.deadline = deadline
         self.sessions = []
         self.pending = {}
@@ -23,11 +23,7 @@ class WorkerPool:
         self.idle_since = {}
         try:
             for worker in range(count):
-                if backend=='scip':
-                    from mo_iqcqp.backends.scip import ScipSession
-                    session=ScipSession(deadline)
-                elif backend=='ls_iqcqp':session=NativeSession(deadline)
-                else:raise ValueError('Unknown search backend')
+                session=NativeSession(deadline)
                 self.sessions.append(session)
                 if input_limits is None:session.load_model(model)
                 else:session.load_model(model,input_limits=input_limits)
@@ -59,13 +55,6 @@ class WorkerPool:
             counts[kind] = counts.get(kind, 0) + 1
         return counts
 
-    def reservations(self):
-        result = {}
-        for item in self.pending.values():
-            k = item['task']['kind']
-            result[k] = result.get(k, 0.) + item['reservation']
-        return result
-
     def submit(self, worker, task, seconds, offset=0, steps=2**31-1):
         if worker in self.pending or self.closed:
             raise RuntimeError('Worker is not idle')
@@ -75,11 +64,11 @@ class WorkerPool:
         token = (worker, self.serial, task['scale_version'])
         task.update(worker=worker, task_id=self.serial)
         # A semantically identical task can continue without WARM/resetting tabu/RNG.
-        signature = repr({k:v for k,v in task.items() if k not in ('task_id','worker','gap','effective_shares','decision')})
+        signature = repr({k:v for k,v in task.items() if k not in ('task_id','worker','gap','decision')})
         continued = self.previous.get(worker) == signature
         self.previous[worker] = signature
         future = self.executor.submit(self._execute, worker, task, token, seconds, offset, steps, continued)
-        self.pending[worker] = dict(future=future, task=task, token=token, reservation=seconds)
+        self.pending[worker] = dict(future=future, task=task, token=token)
         self.records[worker]['tasks'] += 1
         return token
 

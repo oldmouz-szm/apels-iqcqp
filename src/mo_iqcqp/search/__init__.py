@@ -1,1 +1,1 @@
-from .scheduler import Scheduler
+from .adaptive import AdaptiveScheduler

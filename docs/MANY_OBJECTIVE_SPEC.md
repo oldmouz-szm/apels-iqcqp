@@ -4,7 +4,8 @@
 
 The current integer quadratic LP model has a finite objective count `m >= 2`. The LP parser, exact original-model validator, full nondominated archive, task protocol and C++ worker use the actual `m`. Source bytes, sparse terms, variable/constraint counts, address space, tree RSS, time and native integer parsing remain finite resource limits. A failed heuristic search is `UNKNOWN`, not an infeasibility certificate. The output is a validated nondominated *sample*, not a complete Pareto front.
 
-`fixed` retains the 0.3/0.5/0.2 measured-service default. The explicit legacy_v1 option preserves the 2–4D task construction and random sequence. `adaptive` is the legacy exact 2D HV scheduler and requires an `hv-v1` specification. `adaptive_r2` uses the same task construction, window and selection rule with the `r2-asf-v1` reward. New Fixed and Adaptive-R2 runs at the same dimension therefore share task construction and native search. Fixed parses and validates an optional R2 spec without paying online reward cost.
+`adaptive` is the legacy exact 2D HV scheduler and requires an hv-v1 specification. `adaptive_r2` is the default, supports any finite m>=2, and requires an r2-asf-v1 specification. Both share LS-IQCQP task construction and the adaptive window/selection rule. Explicit legacy_v1 retains legacy task construction; current defaults use independent epsilon rotation.
+
 
 ## Search tasks
 
@@ -44,4 +45,4 @@ See ENGINEERING_SPEC.md. The default persistent_unit_v2 uses fixed unit-directio
 
 Origin/scale/weights are frozen and reliable-bound breaches stop with an audit record. The exact signed ASF formula is unchanged. Sparse active-weight evaluation and one normalization per new vector reduce arithmetic work; bounded cache keys retain only the current full archive. Deadline checks protect transactional admission and cache commits.
 
-The source, actual native and coordinator hashes, actual m, bootstrap/reward content and actual SCIP runtime when selected enter v10 identity. Old results are never reused. Finite-weight R2 is not HV, can miss a Pareto improvement and does not certify the full front. No standard UCB1 regret guarantee is claimed. The definition follows Wagner, Trautmann and Brockhoff (2013), Eq.(1), https://www.cmap.polytechnique.fr/~dimo.brockhoff/publicationListFiles/wtb2013a.pdf; normalization and conservative bounds are engineering choices.
+The source, actual native and coordinator hashes, actual m, bootstrap/reward content enter v11 identity. Old results are never reused. Finite-weight R2 is not HV, can miss a Pareto improvement and does not certify the full front. No standard UCB1 regret guarantee is claimed. The definition follows Wagner, Trautmann and Brockhoff (2013), Eq.(1), https://www.cmap.polytechnique.fr/~dimo.brockhoff/publicationListFiles/wtb2013a.pdf; normalization and conservative bounds are engineering choices.

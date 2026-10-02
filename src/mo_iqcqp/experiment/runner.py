@@ -10,15 +10,11 @@ from mo_iqcqp.experiment.resources import configuration, plan, tree, rss, availa
 from concurrent.futures import wait, FIRST_COMPLETED
 from mo_iqcqp.io import load_lp
 from mo_iqcqp.model import SCHEMA as MODEL_SCHEMA
-from mo_iqcqp.search import Scheduler
 from mo_iqcqp.experiment.events import EventStream, inspect_event_log
 
-RUN_PROTOCOL='end-to-end-cold-engineering-v10'
-QUEUE_IDENTITY_SCHEMA='queue-run-engineering-v10'
-CONFIGURATION_SCHEMA='apels-effective-v2'
-DEFAULT_SHARES={'direction':.3,'epsilon':.5,'pls':.2}
-ALGORITHM_CONFIG_KEYS={'jobs','workers','core_budget','memory_mib','tree_memory_mib',
-                       'work_capacity','rho','shares'}
+RUN_PROTOCOL='end-to-end-cold-ls-adaptive-v11'
+QUEUE_IDENTITY_SCHEMA='queue-run-ls-adaptive-v11'
+CONFIGURATION_SCHEMA='apels-effective-v3'
 
 
 def canonical_json(value):
@@ -47,11 +43,7 @@ def implementation_fingerprint():
 
 
 def implementation_for_config(config,deadline=float('inf')):
-    result=implementation_fingerprint()
-    if config.get('search_backend','ls_iqcqp')=='scip':
-        from mo_iqcqp.backends.identity import probe_scip
-        result['scip_runtime']=probe_scip(deadline)
-    return result
+    return implementation_fingerprint()
 
 
 def effective_configuration(config=None):
@@ -60,13 +52,13 @@ def effective_configuration(config=None):
     raw=configuration(config)
     if not isinstance(raw,dict):raise ValueError('Invalid configuration')
     frozen=raw.get('configuration_schema')==CONFIGURATION_SCHEMA
-    mode=raw.get('scheduler_mode','fixed')
+    mode=raw.get('scheduler_mode','adaptive_r2')
     backend=raw.get('search_backend','ls_iqcqp')
-    if backend not in ('ls_iqcqp','scip'):raise ValueError('Unknown search_backend')
-    if mode not in ('fixed','adaptive','adaptive_r2'):raise ValueError('Unknown scheduler_mode')
+    if backend != 'ls_iqcqp':raise ValueError('Unknown search_backend')
+    if mode not in ('adaptive','adaptive_r2'):raise ValueError('Unknown scheduler_mode')
     common={'jobs','workers','core_budget','memory_mib','tree_memory_mib','work_capacity','rho',
             'scheduler_mode','hv_spec','r2_spec','search_backend','task_slice_seconds','bootstrap_strategy','feasibility_slice_seconds'}
-    mode_keys={'shares'} if mode=='fixed' else {'adaptive','enabled_arms'}
+    mode_keys={'adaptive','enabled_arms'}
     allowed=common|mode_keys|({'affinity','configuration_schema','hv_spec_sha256','r2_spec_sha256'} if frozen else set())
     if set(raw)-allowed:raise ValueError('Unknown or ambiguous algorithm configuration key')
     limits=plan(raw)
@@ -94,7 +86,7 @@ def effective_configuration(config=None):
     if not math.isfinite(feasibility_slice) or feasibility_slice<=0 or feasibility_slice>300:
         raise ValueError('Invalid feasibility_slice_seconds')
     expected.update(bootstrap_strategy=bootstrap,feasibility_slice_seconds=feasibility_slice)
-    if backend=='scip' or 'search_backend' in raw:expected['search_backend']=backend
+    expected['search_backend']=backend
     if 'task_slice_seconds' in raw:
         task_slice=float(raw['task_slice_seconds'])
         if not math.isfinite(task_slice) or task_slice<=0 or task_slice>10:
@@ -102,32 +94,20 @@ def effective_configuration(config=None):
         expected['task_slice_seconds']=task_slice
     if mode=='adaptive_r2' or r2_spec is not None:
         expected.update(r2_spec=r2_spec,r2_spec_sha256=r2_hash)
-    if mode=='fixed':
-        shares=raw.get('shares',DEFAULT_SHARES)
-        if not isinstance(shares,dict) or set(shares)!=set(DEFAULT_SHARES):
-            raise ValueError('Invalid time shares')
-        if any(type(v) not in (int,float) or not math.isfinite(v) or v<0 for v in shares.values()):
-            raise ValueError('Invalid time shares')
-        total=sum(shares[k] for k in DEFAULT_SHARES)
-        if not math.isfinite(total) or total<=0:raise ValueError('Invalid time shares')
-        if frozen and (abs(total-1)>1e-12 or any(type(v) is not float for v in shares.values())):
-            raise ValueError('Invalid frozen shares')
-        expected['shares']=dict(shares) if frozen else {k:float(shares[k])/total for k in DEFAULT_SHARES}
-    else:
-        if mode=='adaptive' and spec is None:raise ValueError('Adaptive requires a fixed hv_spec')
-        if 'enabled_arms' in raw:
-            from mo_iqcqp.search.adaptive import ARMS
-            enabled=raw['enabled_arms']
-            if (not isinstance(enabled,list) or not enabled or
-                any(type(arm) is not str or arm not in ARMS for arm in enabled) or
-                len(set(enabled))!=len(enabled) or enabled!=[arm for arm in ARMS if arm in enabled]):
-                raise ValueError('enabled_arms must be a nonempty canonical subset of search arms')
-            expected['enabled_arms']=list(enabled)
-        parameters={'window':30,'reward_version':R2_REWARD_VERSION if mode=='adaptive_r2' else REWARD_VERSION}
-        actual=raw.get('adaptive',parameters)
-        if actual!=parameters or type(actual.get('window')) is not int:
-            raise ValueError('Adaptive requires window=30 and the selected fixed reward version')
-        expected['adaptive']=parameters
+    if mode=='adaptive' and spec is None:raise ValueError('Adaptive requires a fixed hv_spec')
+    if 'enabled_arms' in raw:
+        from mo_iqcqp.search.adaptive import ARMS
+        enabled=raw['enabled_arms']
+        if (not isinstance(enabled,list) or not enabled or
+            any(type(arm) is not str or arm not in ARMS for arm in enabled) or
+            len(set(enabled))!=len(enabled) or enabled!=[arm for arm in ARMS if arm in enabled]):
+            raise ValueError('enabled_arms must be a nonempty canonical subset of search arms')
+        expected['enabled_arms']=list(enabled)
+    parameters={'window':30,'reward_version':R2_REWARD_VERSION if mode=='adaptive_r2' else REWARD_VERSION}
+    actual=raw.get('adaptive',parameters)
+    if actual!=parameters or type(actual.get('window')) is not int:
+        raise ValueError('Adaptive requires window=30 and the selected fixed reward version')
+    expected['adaptive']=parameters
     if frozen and raw!=expected:raise ValueError('Effective configuration snapshot changed')
     return expected
 
@@ -349,7 +329,6 @@ def run(path,budget=10,seed=1,algorithm='apels',output=None,max_bytes=40_000_000
         if isinstance(reward,FixedR2):archive.normalization_checker=reward.check_point
         structure=None;initial=None
         if variant=='Structure-enhanced':
-            if config.get('search_backend','ls_iqcqp')!='ls_iqcqp':raise ValueError('STRUCTURE_ENHANCED_REQUIRES_LS_BACKEND')
             from mo_iqcqp.model.structure import identify,from_permutation
             structure=identify(model)
             if structure is None:raise ValueError('STRUCTURE_NOT_PROVEN: enhanced variant unavailable')
@@ -366,10 +345,8 @@ def run(path,budget=10,seed=1,algorithm='apels',output=None,max_bytes=40_000_000
                 raise ValueError('STRUCTURED_INITIALIZATION_FAILS_OTHER_ORIGINAL_CONSTRAINTS')
             first_feasible=time.monotonic()-start
         from mo_iqcqp.search.adaptive import AdaptiveScheduler
-        adaptive=config['scheduler_mode']!='fixed'
-        scheduler=(AdaptiveScheduler if adaptive else Scheduler)(len(model.objectives),seed,config=config)
-        pool=WorkerPool(model,limits['workers'],deadline,seed,structure,initial,input_limits=caps,
-                        backend=config.get('search_backend','ls_iqcqp'))
+        scheduler=AdaptiveScheduler(len(model.objectives),seed,config=config)
+        pool=WorkerPool(model,limits['workers'],deadline,seed,structure,initial,input_limits=caps)
         from mo_iqcqp.search.bootstrap import PersistentBootstrap
         bootstrap=PersistentBootstrap(len(model.objectives),config['bootstrap_strategy'])
         slice_seconds=config.get('task_slice_seconds',.1 if budget<=10 else .5 if budget<=60 else 1.)
@@ -381,12 +358,10 @@ def run(path,budget=10,seed=1,algorithm='apels',output=None,max_bytes=40_000_000
                 decision_started=time.monotonic()
                 persistent=not archive.points and config['bootstrap_strategy'] in ('persistent_unit_v1','persistent_unit_v2')
                 task=(bootstrap.task(worker) if persistent else
-                      scheduler.next(archive,reserved=pool.pending_counts() if adaptive else pool.reservations(),deadline=deadline))
+                      scheduler.next(archive,reserved=pool.pending_counts(),deadline=deadline))
                 metrics['scheduler_wall']+=time.monotonic()-decision_started
                 if task is not None and not persistent:
-                    task['decision']=(scheduler.last_decision if adaptive else
-                        dict(eligible=list(scheduler.eligible),pending=pool.pending_counts(),
-                             forced_reason=None))
+                    task['decision']=scheduler.last_decision
                 if task is None:break
                 if not persistent and not archive.points and task['seed'] is None and scheduler.turn>1:
                     task['seed']=[]
@@ -430,7 +405,7 @@ def run(path,budget=10,seed=1,algorithm='apels',output=None,max_bytes=40_000_000
                 batch_validation_before=metrics['validation_wall'];batch_archive_before=metrics['archive_update_wall']
                 archive_before=len(archive.points);reward_before=None;gain=None
                 reward_wall=0.;reward_status='not_enabled';batch_complete=False
-                reward_enabled=adaptive and task['kind']!='feasibility'
+                reward_enabled=task['kind']!='feasibility'
                 try:
                     if reward_enabled:
                         reward_status='incomplete'
@@ -454,7 +429,7 @@ def run(path,budget=10,seed=1,algorithm='apels',output=None,max_bytes=40_000_000
                             raise
                     batch_complete=(time.monotonic()<deadline and
                                     metrics['dropped_before_validation']==before['dropped_before_validation'])
-                    if adaptive and isinstance(reward,FixedR2) and task['kind']=='feasibility' and accepted and batch_complete and not result['error']:
+                    if isinstance(reward,FixedR2) and task['kind']=='feasibility' and accepted and batch_complete and not result['error']:
                         reward_start=time.monotonic()
                         try:reward.value(archive,deadline)
                         finally:reward_wall+=time.monotonic()-reward_start
@@ -490,7 +465,7 @@ def run(path,budget=10,seed=1,algorithm='apels',output=None,max_bytes=40_000_000
                         archive_before=archive_before,hv_spec_sha256=config['hv_spec_sha256'],
                         r2_spec_sha256=config.get('r2_spec_sha256'),
                         reward=dict(status=reward_status,gain=str(gain) if gain is not None else None,
-                                    type='r2-asf-v1' if config['scheduler_mode']=='adaptive_r2' else 'hv-v1' if adaptive else None,
+                                    type='r2-asf-v1' if config['scheduler_mode']=='adaptive_r2' else 'hv-v1',
                                     wall=reward_wall,
                                     gain_per_service=str(gain / __import__('fractions').Fraction(str(spent))) if gain is not None else None),
                         cumulative_service=dict(scheduler.elapsed),
@@ -593,7 +568,7 @@ def run(path,budget=10,seed=1,algorithm='apels',output=None,max_bytes=40_000_000
         effective_learning_wall=max(0,budget-first_feasible) if first_feasible is not None else 0.,
         scheduler_mode=config['scheduler_mode'],search_backend=config.get('search_backend','ls_iqcqp'),
         objective_dimension=len(model.objectives) if model else None,
-        reward_type='r2-asf-v1' if config['scheduler_mode']=='adaptive_r2' else 'hv-v1' if config['scheduler_mode']=='adaptive' else None,
+        reward_type='r2-asf-v1' if config['scheduler_mode']=='adaptive_r2' else 'hv-v1',
         hv_spec_sha256=config['hv_spec_sha256'],r2_spec_sha256=config.get('r2_spec_sha256'),
         r2_online=(dict(status='COMPUTED',direction='minimize',exact_value=str(sum(reward._minima)/len(reward._minima)))
                    if config['scheduler_mode']=='adaptive_r2' and reward is not None

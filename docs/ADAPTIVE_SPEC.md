@@ -1,6 +1,6 @@
 # apels-iqcqp adaptive scheduling
 
-The Fixed scheduler preserves its default measured service shares: direction 0.3, epsilon 0.5, PLS 0.2. Equal or disabled shares can be configured explicitly. Adaptive supports exactly two objectives and never uses Fixed shares. Feasibility search runs while the validated archive is empty and is not a bandit arm. Direction and PLS are eligible after one objective vector; epsilon requires two distinct vectors from the full archive, even if the scheduler work capacity is one.
+Adaptive-HV supports exactly two objectives. Feasibility search runs while the validated archive is empty and is not a bandit arm. Direction and PLS are eligible after one objective vector; epsilon requires two distinct vectors from the full archive, even if the scheduler work capacity is one.
 
 For each instance, a supplied `hv-v1` specification freezes objective directions, normalization origin and scale, and a strictly worse reference. The specification must match the input SHA-256 and mathematical model fingerprint. Search tasks keep their own frozen z/scale, which do not change reward coordinates. A completed task receives the exact Fraction reward
 
@@ -21,4 +21,4 @@ For currently eligible arms let n[k] be completed window observations, p[k] be i
 
 Scores within 1e-12 relative or absolute tolerance tie. Ties use an independent SHA-256-derived RNG, leaving the task-construction RNG unchanged. A pending task is counted for exploration but has no invented gain. Every decision and task result is recorded in finite JSON telemetry. Identical event, pending and service sequences replay identical decisions; wall-clock searches need not produce identical points.
 
-This is a sliding-window, gain-per-service, pending-adjusted UCB-style heuristic. It is neither FRRMAB nor covered by standard UCB1 regret bounds. This page defines the legacy exact-HV Adaptive mode, which still supports only two objectives. Fixed and the new Adaptive-R2 mode support finite `m>=2`; their extension and signed ASF/R2 reward are specified in [MANY_OBJECTIVE_SPEC.md](MANY_OBJECTIVE_SPEC.md).
+This is a sliding-window, gain-per-service, pending-adjusted UCB-style heuristic. It is neither FRRMAB nor covered by standard UCB1 regret bounds. This page defines the legacy exact-HV Adaptive mode, which still supports only two objectives. Adaptive-R2 supports finite `m>=2`; their extension and signed ASF/R2 reward are specified in [MANY_OBJECTIVE_SPEC.md](MANY_OBJECTIVE_SPEC.md).
