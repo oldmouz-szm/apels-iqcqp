@@ -1,4 +1,4 @@
-# Many-objective Adaptive-APELS specification
+# apels-iqcqp many-objective specification
 
 ## Scope and compatibility
 

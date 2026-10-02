@@ -16,7 +16,7 @@ class AdaptiveScheduler(Scheduler):
         config = config or {}
         version = config.get('adaptive', {}).get('reward_version', REWARD_VERSION)
         if version == REWARD_VERSION and n != 2:
-            raise ValueError('Adaptive-APELS supports exactly two objectives with exact HV')
+            raise ValueError('apels-iqcqp Adaptive-HV supports exactly two objectives with exact HV')
         if n < 2 or version not in (REWARD_VERSION, R2_REWARD_VERSION):
             raise ValueError('Reward version/objective dimension mismatch')
         self.reward_version = version

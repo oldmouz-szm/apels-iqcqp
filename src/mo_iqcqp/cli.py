@@ -30,7 +30,7 @@ def _show_run(result,metrics=None,metric_error=False):
 
 
 def main():
-    p=argparse.ArgumentParser(prog='mo-iqcqp');sub=p.add_subparsers(dest='command',required=True)
+    p=argparse.ArgumentParser(prog='apels-iqcqp');sub=p.add_subparsers(dest='command',required=True)
     for name in ['run','_worker']:
         r=sub.add_parser(name);r.add_argument('path');r.add_argument('--budget',type=float,default=10);r.add_argument('--seed',type=int,default=1);r.add_argument('--algorithm',choices=['apels'],default='apels');r.add_argument('--output',required=True)
         for key,default in INPUT_DEFAULTS.items():r.add_argument('--'+key.replace('_','-'),type=int,default=default)
@@ -97,21 +97,21 @@ def main():
                 except Exception as exc:
                     metric_error=True
                     import sys
-                    print(f'mo-iqcqp: HV computation failed: {type(exc).__name__}: {exc}',file=sys.stderr)
+                    print(f'apels-iqcqp: HV computation failed: {type(exc).__name__}: {exc}',file=sys.stderr)
             _show_run(result,metrics,metric_error)
             if result.get('error'):
                 import sys
-                print(f'mo-iqcqp: {result["error"]}',file=sys.stderr)
+                print(f'apels-iqcqp: {result["error"]}',file=sys.stderr)
             if metric_error:raise SystemExit(2)
         if result['status']!='COMPLETED':
             import sys
-            print('mo-iqcqp: status='+str(result['status']),file=sys.stderr)
+            print('apels-iqcqp: status='+str(result['status']),file=sys.stderr)
             raise SystemExit(130 if result['status']=='INTERRUPTED' else
                              124 if result['status']=='HARD_TIMEOUT' else
                              3 if result['status'].startswith('RESOURCE_') else 2)
     elif cmd=='queue':
         try:queue(**a,on_result=_show_run)
-        except RuntimeError as exc:p.exit(2,f'mo-iqcqp: {exc}\n')
+        except RuntimeError as exc:p.exit(2,f'apels-iqcqp: {exc}\n')
     elif cmd=='metrics':
         from pathlib import Path
         import os

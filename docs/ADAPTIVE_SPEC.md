@@ -1,4 +1,4 @@
-# Adaptive-APELS scheduling
+# apels-iqcqp adaptive scheduling
 
 The Fixed scheduler preserves its default measured service shares: direction 0.3, epsilon 0.5, PLS 0.2. Equal or disabled shares can be configured explicitly. Adaptive supports exactly two objectives and never uses Fixed shares. Feasibility search runs while the validated archive is empty and is not a bandit arm. Direction and PLS are eligible after one objective vector; epsilon requires two distinct vectors from the full archive, even if the scheduler work capacity is one.
 
