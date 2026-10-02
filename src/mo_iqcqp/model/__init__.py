@@ -19,6 +19,7 @@ class Expr:
         else: self.terms.pop(key, None)
 
     def evaluate(self, x, deadline=float('inf')):
+        if time.monotonic() >= deadline: raise TimeoutError('evaluation deadline')
         value = 0
         for count, (key, coeff) in enumerate(self.terms.items()):
             if count % 1024 == 0 and time.monotonic() >= deadline: raise TimeoutError('evaluation deadline')
@@ -27,8 +28,13 @@ class Expr:
             value += product
         return value
 
-    def scaled(self, scale):
-        return Expr({k:v*scale for k,v in self.terms.items() if v*scale})
+    def scaled(self, scale, deadline=float('inf')):
+        terms={}
+        for i,(k,v) in enumerate(self.terms.items()):
+            if i % 128 == 0 and time.monotonic()>=deadline:raise TimeoutError('expression scaling deadline')
+            value=v*scale
+            if value:terms[k]=value
+        return Expr(terms)
 
     def serial(self): return [[list(k), str(v)] for k,v in sorted(self.terms.items())]
 
@@ -63,10 +69,12 @@ class Model:
         return hashlib.sha256(json.dumps(payload,separators=(',',':')).encode()).hexdigest()
 
     def validate(self, x, names=None, deadline=float('inf')):
+        if time.monotonic() >= deadline: raise TimeoutError('validation deadline')
         if names is not None and list(names) != [v.name for v in self.variables]: return {'valid':False,'reason':'VARIABLE_MAPPING'}
         if len(x)!=len(self.variables): return {'valid':False,'reason':'DIMENSION'}
         values=[]
-        for v,y in zip(self.variables,x):
+        for index,(v,y) in enumerate(zip(self.variables,x)):
+            if index % 128 == 0 and time.monotonic() >= deadline: raise TimeoutError('validation deadline')
             # Native JSON emits exact integral assignments as Python ints. Keep
             # the Fraction conversion for every other representation, including
             # floats and strings, so their existing exact decimal semantics stay.
@@ -82,6 +90,7 @@ class Model:
             violation+=abs(value) if c.sense=='=' else max(0,value if c.sense=='<=' else -value)
         original=[e.evaluate(values,deadline) for e in self.objectives]
         internal=[v if d=='min' else -v for v,d in zip(original,self.directions)]
+        if time.monotonic() >= deadline: raise TimeoutError('validation deadline')
         return {'valid':violation==0,'reason':'VALID' if violation==0 else 'ORIGINAL_INFEASIBLE', 'violation':violation,'original':original,'internal':internal,'x':values}
 
 def from_matrix(matrix):

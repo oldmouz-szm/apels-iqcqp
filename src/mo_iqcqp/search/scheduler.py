@@ -1,6 +1,7 @@
 """Fixed measured-time shares with gap/grid epsilon scheduling."""
 import math
 import random
+import time
 from fractions import Fraction as F
 
 class Scheduler:
@@ -16,8 +17,8 @@ class Scheduler:
             if set(shares)!=set(self.shares) or any(not math.isfinite(v) or v<0 for v in shares.values()) or not 0<sum(shares.values())<float('inf'):raise ValueError('Invalid time shares')
             self.shares=(dict(shares) if config.get('configuration_schema') in ('apels-effective-v1','apels-effective-v2')
                          else {k:float(v)/sum(shares.values()) for k,v in shares.items()})
-    def next(self,archive,reserved=None):
-        points=archive.work();n=self.n;t=self.turn;self.turn+=1
+    def next(self,archive,reserved=None,deadline=float('inf')):
+        points=archive.work(deadline);n=self.n;t=self.turn;self.turn+=1
         # Epsilon needs two distinct full-archive witnesses, even at work_capacity=1.
         if len(points)==1 and len(archive.points)>1:
             points.append(next(p for p in archive.points.values() if p['internal']!=points[0]['internal']))
@@ -28,8 +29,11 @@ class Scheduler:
         if not eligible:return None
         reserved=reserved or {}
         kind,effective=self._select(eligible,reserved)
-        z=[min(p['internal'][j] for p in points) if points else 0 for j in range(n)]
-        scale=[max(1,max(p['internal'][j] for p in points)-z[j]) if points else 1 for j in range(n)]
+        z=[];scale=[]
+        for j in range(n):
+            if time.monotonic()>=deadline:raise TimeoutError('task construction deadline')
+            low=min(p['internal'][j] for p in points) if points else 0
+            z.append(low);scale.append(max(1,max(p['internal'][j] for p in points)-low) if points else 1)
         if (z,scale)!=self.last_scale:self.version+=1;self.last_scale=(z,scale)
         eps=[None]*n;seed=None;gap_key=None
         if kind in ('direction','feasibility'):
@@ -71,8 +75,9 @@ class Scheduler:
                 for a in points:
                     cell=tuple(math.floor(float((a['internal'][j]-z[j])/scale[j])*20) for j in range(n));grid.setdefault(cell,[]).append(a)
                 sparse=min(grid,key=lambda c:(len(grid[c]),self.rng.random()));a=self.rng.choice(grid[sparse])
-                rotation=t if n<=4 else self.epsilon_turn
-                if n>4:self.epsilon_turn+=1
+                legacy_grid=n<=4 and self.bootstrap_strategy=='legacy_v1'
+                rotation=t if legacy_grid else self.epsilon_turn
+                if not legacy_grid:self.epsilon_turn+=1
                 primary=rotation%n;q=(primary+1+rotation//n%(n-1))%n;eta=[F(1,100),F(3,100),F(1,10)][t%3]
                 eps=[None if j==primary else a['internal'][j]+(-eta if j==q else eta)*scale[j] for j in range(n)]
                 seed=min(points,key=lambda a:sum(max(0,float(a['internal'][j]-eps[j]))/float(scale[j]) for j in range(n) if eps[j] is not None))['x']
@@ -84,6 +89,7 @@ class Scheduler:
             self.last_decision['forced_reason']=reason
         result={'kind':kind,'effective_shares':effective,'weights':weights,'eps':eps,'seed':seed,'z':z,'scale':scale,'scale_version':self.version,'gap':repr(gap_key) if gap_key else None}
         if self.bootstrap_strategy!='legacy_v1' or reason=='second_witness':result['bootstrap_reason']=reason
+        if time.monotonic()>=deadline:raise TimeoutError('task construction deadline')
         return result
 
     def _eligible(self, points):

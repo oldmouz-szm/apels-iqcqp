@@ -1,6 +1,6 @@
-# Batch safety contract — v9 (2026-10-02)
+# Batch safety contract — v10 (2026-10-02)
 
-This repair addresses the seven reproduced findings in the independent review. It does not change LS moves, exact original-model feasibility, signed ASF, fixed R2 normalization, UCB/window or ordinary direction/epsilon/PLS task construction.
+The seven earlier batch-safety guarantees remain in force. LS move rules, exact original-model validation, signed ASF, fixed R2 normalization and UCB/window semantics are retained. Current operator completion and epsilon rotation changes are specified in ENGINEERING_SPEC.md.
 
 ## Process ownership
 
@@ -10,7 +10,7 @@ On Linux, each managed child receives its creator PID and arms PR_SET_PDEATHSIG(
 
 The supervisor writes an exclusive `<output>.request` JSON sidecar and passes only its pathname and SHA256 through argv. The child verifies schema, invocation start, content digest and mutual exclusion with legacy inline arguments before use. The verified request file is the only preexisting output artifact accepted by the child. The sidecar freezes effective algorithm/resource configuration and queue identity, including actual objective dimension, input/source/native hashes and reward specification. Large finite-dimensional configurations no longer hit Linux's per-argument size cap. Parsing, allocation and hashing still cost real time/memory and can exhaust resources.
 
-Run protocol: `end-to-end-cold-manyobj-batch-v9`. Queue schema: `queue-run-manyobj-batch-v9`. Existing v7/v8 results remain historical and are never reused as v9.
+Run protocol: `end-to-end-cold-engineering-v10`. Queue schema: `queue-run-engineering-v10`. Existing v7/v8/v9 results remain historical and are never reused as v10.
 
 ## Saved content, resume and recovery
 
@@ -35,3 +35,5 @@ The auxiliary task_value variable is initialized by evaluating the actual scalar
 The development checkout retains the acceptance logs and independent audit artifacts. Tests cover coordinator death before the first sample, supervisor SIGKILL cascade, Ctrl-C with a newer final result, checkpoint recovery, blocked parsing, resource-stop/exit codes, request corruption, malformed or tampered saved samples, 200D queue transport, Fixed second witness and real SCIP warm starts. Short cold functional runs validated fresh source/config/result artifacts and 1/2/4-worker execution in the development checkout.
 
 These are engineering gates, not evidence of quality superiority or parallel speedup. Large archives still require full exact validation, result serialization and O(|A|^2 m) resume nondominance checking. RSS observations are sampled, not a strict instantaneous tree cap; per-process RLIMIT_AS remains enforced. No new 300-second performance comparison is included. Begin subsequent large experiments with a separately frozen small real-input pilot, then expand only after its independent audit succeeds.
+
+Current deadline granularity, SCIP operator closure/runtime identity and exact R2 optimizations are specified in ENGINEERING_SPEC.md.

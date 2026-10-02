@@ -13,8 +13,8 @@ from mo_iqcqp.model import SCHEMA as MODEL_SCHEMA
 from mo_iqcqp.search import Scheduler
 from mo_iqcqp.experiment.events import EventStream, inspect_event_log
 
-RUN_PROTOCOL='end-to-end-cold-manyobj-batch-v9'
-QUEUE_IDENTITY_SCHEMA='queue-run-manyobj-batch-v9'
+RUN_PROTOCOL='end-to-end-cold-engineering-v10'
+QUEUE_IDENTITY_SCHEMA='queue-run-engineering-v10'
 CONFIGURATION_SCHEMA='apels-effective-v2'
 DEFAULT_SHARES={'direction':.3,'epsilon':.5,'pls':.2}
 ALGORITHM_CONFIG_KEYS={'jobs','workers','core_budget','memory_mib','tree_memory_mib',
@@ -44,6 +44,14 @@ def implementation_fingerprint():
         h.update(file.read_bytes())
     native=Path(os.environ.get('MO_IQCQP_NATIVE') or root/'build/ls_worker')
     return {'source_sha256':h.hexdigest(),'native_sha256':file_sha256(native),'controller_sha256':file_sha256(__file__)}
+
+
+def implementation_for_config(config,deadline=float('inf')):
+    result=implementation_fingerprint()
+    if config.get('search_backend','ls_iqcqp')=='scip':
+        from mo_iqcqp.backends.identity import probe_scip
+        result['scip_runtime']=probe_scip(deadline)
+    return result
 
 
 def effective_configuration(config=None):
@@ -80,10 +88,8 @@ def effective_configuration(config=None):
         raise ValueError('Legacy Adaptive requires HV, not R2')
     expected=dict(**limits,work_capacity=capacity,rho=rho,scheduler_mode=mode,
                   hv_spec=spec,hv_spec_sha256=spec_hash,configuration_schema=CONFIGURATION_SCHEMA)
-    bootstrap=raw.get('bootstrap_strategy','persistent_unit_v2' if backend=='ls_iqcqp' else 'persistent_unit_v1')
+    bootstrap=raw.get('bootstrap_strategy','persistent_unit_v2')
     if bootstrap not in ('persistent_unit_v2','persistent_unit_v1','legacy_v1'):raise ValueError('Invalid bootstrap_strategy')
-    if bootstrap=='persistent_unit_v2' and backend!='ls_iqcqp':
-        raise ValueError('persistent_unit_v2 requires the LS-IQCQP backend')
     feasibility_slice=float(raw.get('feasibility_slice_seconds',10.))
     if not math.isfinite(feasibility_slice) or feasibility_slice<=0 or feasibility_slice>300:
         raise ValueError('Invalid feasibility_slice_seconds')
@@ -243,7 +249,7 @@ def admit(model, archive, candidate, task, deadline, start, metrics=None):
     checked.update(worker=candidate['worker'],task_id=candidate['task_id'],
                    scale_version=candidate['scale_version'],validated_by_elapsed=time.monotonic()-start)
     if checked['valid'] and hasattr(archive,'normalization_checker'):
-        try:archive.normalization_checker(checked['internal'])
+        try:archive.normalization_checker(checked['internal'],deadline)
         except ValueError:
             if metrics is not None:metrics['normalization_violation_audit']=checked
             raise
@@ -270,7 +276,7 @@ def run(path,budget=10,seed=1,algorithm='apels',output=None,max_bytes=40_000_000
     require_new_output(output,worker_request_sha256)
     old_affinity=os.sched_getaffinity(0);old_as=resource.getrlimit(resource.RLIMIT_AS)
     start=started if started is not None else time.monotonic();deadline=start+budget
-    archive=Archive();stream=None;pool=None;model=None;scheduler=None;reward=None;first_feasible=None
+    archive=Archive();stream=None;pool=None;model=None;model_fp=None;scheduler=None;reward=None;first_feasible=None
     run_observation=None;applied_address_space_mib=None
     metrics=dict(candidates_returned=0,batch_distinct_assignments=0,batch_repeat_assignments=0,
         validation_started=0,validation_completed=0,validation_timed_out=0,validation_errors=0,
@@ -315,7 +321,7 @@ def run(path,budget=10,seed=1,algorithm='apels',output=None,max_bytes=40_000_000
         applied_address_space_mib=None if soft_limit<0 else soft_limit/1024**2
         free=available_memory()
         if free is not None and free<1024**3:raise MemoryError('Less than 1 GiB available; search deferred')
-        impl=implementation_fingerprint()
+        impl=implementation_for_config(config,deadline)
         code_hash=impl['source_sha256']
         if queue_identity:
             expected=queue_identity['payload']
@@ -328,6 +334,7 @@ def run(path,budget=10,seed=1,algorithm='apels',output=None,max_bytes=40_000_000
         archive.capacity=int(config.get('work_capacity',512))
         if archive.capacity<1:raise ValueError('work_capacity must be positive')
         model=load_lp(path,deadline,**caps)
+        model_fp=model.fingerprint()
         if len(model.objectives)<2:raise ValueError('Solver requires at least two objectives')
         if queue_identity and queue_identity['payload'].get('objective_dimension') not in (None,len(model.objectives)):
             raise RuntimeError('QUEUE_OBJECTIVE_DIMENSION_CHANGED before search')
@@ -342,6 +349,7 @@ def run(path,budget=10,seed=1,algorithm='apels',output=None,max_bytes=40_000_000
         if isinstance(reward,FixedR2):archive.normalization_checker=reward.check_point
         structure=None;initial=None
         if variant=='Structure-enhanced':
+            if config.get('search_backend','ls_iqcqp')!='ls_iqcqp':raise ValueError('STRUCTURE_ENHANCED_REQUIRES_LS_BACKEND')
             from mo_iqcqp.model.structure import identify,from_permutation
             structure=identify(model)
             if structure is None:raise ValueError('STRUCTURE_NOT_PROVEN: enhanced variant unavailable')
@@ -373,7 +381,7 @@ def run(path,budget=10,seed=1,algorithm='apels',output=None,max_bytes=40_000_000
                 decision_started=time.monotonic()
                 persistent=not archive.points and config['bootstrap_strategy'] in ('persistent_unit_v1','persistent_unit_v2')
                 task=(bootstrap.task(worker) if persistent else
-                      scheduler.next(archive,reserved=pool.pending_counts() if adaptive else pool.reservations()))
+                      scheduler.next(archive,reserved=pool.pending_counts() if adaptive else pool.reservations(),deadline=deadline))
                 metrics['scheduler_wall']+=time.monotonic()-decision_started
                 if task is not None and not persistent:
                     task['decision']=(scheduler.last_decision if adaptive else
@@ -491,7 +499,7 @@ def run(path,budget=10,seed=1,algorithm='apels',output=None,max_bytes=40_000_000
                         pending_after=pool.pending_counts(),
                         at=time.monotonic()-start,archive_size=len(archive.points),accepted=accepted,
                         candidates=len(candidates),continued=result['continued'],
-                        native_slice=result.get('native_slice'),
+                        native_slice=result.get('native_slice'),operator_diagnostics=result.get('operator_diagnostics'),
                         outcome='NEW_POINT' if accepted else 'SEARCH_FAILED_UNKNOWN',error=result['error'],
                         candidate_accounting=dict(
                             **{key:metrics[key]-before[key] for key in count_keys},
@@ -513,7 +521,7 @@ def run(path,budget=10,seed=1,algorithm='apels',output=None,max_bytes=40_000_000
                     budget=budget,seed=seed,algorithm=algorithm,source=str(path),variant=variant,
                     implementation_fingerprint=impl,implementation_sha256=code_hash,protocol=RUN_PROTOCOL,
                     algorithm_configuration=config,queue_identity=queue_identity,input_limits=caps,
-                    model_source=model.source,model_fingerprint=model.fingerprint(),
+                    model_source=model.source,model_fingerprint=model_fp,
                     variable_names=[v.name for v in model.variables],original_directions=model.directions,
                     objective_dimension=len(model.objectives),first_feasible_elapsed=first_feasible,
                     events_log=stream.descriptor(),statistics=dict(metrics)))
@@ -575,7 +583,7 @@ def run(path,budget=10,seed=1,algorithm='apels',output=None,max_bytes=40_000_000
         recent_events=list(stream.recent) if stream else [],
         time_shares=scheduler.elapsed if scheduler else {},statistics=statistics,
         statistics_complete=status=='COMPLETED',
-        model_fingerprint=model.fingerprint() if model else None,model_source=model.source if model else None,
+        model_fingerprint=model_fp,model_source=model.source if model else None,
         claim='approximate nondominated validated samples; no optimality/infeasibility proof',
         service_time_definition='sum of worker active task wall plus coordinator batch snapshot/validation/admission/reward wall; concurrent intervals overlap; not CPU time',
         address_space_limit_applied=not sanitizer,
@@ -688,7 +696,7 @@ def supervise(path,budget=10,seed=1,algorithm='apels',output=None,max_bytes=40_0
         if 'sanitize' not in os.environ.get('MO_IQCQP_NATIVE',''):
             resource.setrlimit(resource.RLIMIT_AS,(limits['memory_mib']*1024**2,old_as[1]))
         applied_supervisor=resource.getrlimit(resource.RLIMIT_AS)[0]
-        expected['implementation_fingerprint']=implementation_fingerprint()
+        expected['implementation_fingerprint']=implementation_for_config(config_snapshot,start+budget)
         request=dict(schema='apels-worker-request-v1',started=start,
                      algorithm_configuration=config_snapshot,queue_identity=queue_identity)
         atomic_json_new(request_path,request)
@@ -763,12 +771,16 @@ def queue(config,output,on_result=None):
         snapshot=effective_configuration(task.get('algorithm_config'))
         if snapshot['core_budget']>queue_limits['core_budget']:
             raise ValueError('Run core_budget exceeds queue core_budget')
-        source_sha=file_sha256(task['path'])
         caps=input_limits({key:task[key] for key in INPUT_DEFAULTS if key in task})
+        import stat
+        source_stat=Path(task['path']).stat()
+        if not stat.S_ISREG(source_stat.st_mode):raise ValueError('QUEUE_INPUT_MUST_BE_REGULAR_FILE')
+        if source_stat.st_size>caps['max_bytes']:raise ValueError('QUEUE_INPUT_BYTE_LIMIT')
+        source_sha=file_sha256(task['path'])
         from mo_iqcqp.io.lp import ParseError
         try:objective_dimension=len(load_lp(task['path'],**caps).objectives)
         except ParseError:objective_dimension=None
-        identity=queue_run_identity(task,snapshot,source_sha,implementation_fingerprint(),objective_dimension)
+        identity=queue_run_identity(task,snapshot,source_sha,implementation_for_config(snapshot),objective_dimension)
         digest=identity['digest']
         attempt=0
         while True:

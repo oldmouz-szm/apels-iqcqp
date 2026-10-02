@@ -40,7 +40,17 @@ class FixedR2:
         raw = spec['weights']
         if not isinstance(raw, list) or not raw:
             raise ValueError('R2 needs finite nonempty weights')
-        self.weights = tuple(vector(w, self.dimensions, 'weight') for w in raw)
+        parsed=[]
+        for w in raw:
+            check_deadline(deadline, clock)
+            if len(w)!=self.dimensions:raise ValueError('weight dimension mismatch')
+            row=[]
+            for j,v in enumerate(w):
+                if j % 128 == 0:check_deadline(deadline, clock)
+                row.append(number(v))
+            parsed.append(tuple(row))
+        self.weights=tuple(parsed)
+        self._active=tuple(tuple((j,w) for j,w in enumerate(row) if w) for row in self.weights)
         if any(any(v < 0 for v in w) or sum(w) != 1 for w in self.weights):
             raise ValueError('R2 weights must be nonnegative and sum to one')
         self.reliable_lower=(validate_provenance(spec,model,self.origin,self.scale,deadline,clock) if new else (None,)*self.dimensions)
@@ -48,14 +58,20 @@ class FixedR2:
         self._minima = None
         check_deadline(deadline, clock)
 
-    def check_point(self, point):
+    def check_point(self, point, deadline=float('inf')):
         if len(point)!=self.dimensions:raise ValueError('R2 point dimension mismatch')
-        if any(l is not None and number(x)<l for x,l in zip(point,self.reliable_lower)):
-            raise ValueError('RELIABLE_R2_LOWER_BOUND_BREACH')
+        for j,(x,l) in enumerate(zip(point,self.reliable_lower)):
+            if j % 128 == 0:check_deadline(deadline,self.clock)
+            if l is not None and number(x)<l:
+                raise ValueError('RELIABLE_R2_LOWER_BOUND_BREACH')
 
-    def _asf(self, point, weight):
-        return max(w * (number(x)-o) / s
-                   for x, o, s, w in zip(point, self.origin, self.scale, weight))
+    def _asf(self, point, weight, deadline=float('inf')):
+        best=None
+        for j,(x,o,s,w) in enumerate(zip(point,self.origin,self.scale,weight)):
+            if j % 128 == 0:check_deadline(deadline,self.clock)
+            value=w*(number(x)-o)/s
+            best=value if best is None else max(best,value)
+        return best
 
     def full_value(self, archive, deadline=float('inf')):
         """Independent complete-archive recomputation; useful for audits."""
@@ -68,31 +84,40 @@ class FixedR2:
                 check_deadline(deadline, self.clock)
                 if len(point) != self.dimensions:
                     raise ValueError('R2 point dimension mismatch')
-                self.check_point(point)
-                value = self._asf(point, weight)
+                self.check_point(point,deadline)
+                value = self._asf(point, weight, deadline)
                 best = value if best is None else min(best, value)
             minima.append(best)
         check_deadline(deadline, self.clock)
         return sum(minima, Fraction(0)) / len(minima)
 
     def value(self, archive, deadline=float('inf')):
-        """Commit cache only after all dimensions, points and deadline checks pass."""
+        """Atomic cache; normalize each new point once, retain only live keys."""
+        check_deadline(deadline,self.clock)
         if not archive.points:
             return None
-        seen = set(self._seen)
-        minima = list(self._minima) if self._minima is not None else [None]*len(self.weights)
+        minima=list(self._minima) if self._minima is not None else [None]*len(self.weights)
+        current=set()
         for point in archive.points:
-            check_deadline(deadline, self.clock)
-            if len(point) != self.dimensions:
-                raise ValueError('R2 point dimension mismatch')
-            self.check_point(point)
-            if point in seen:
-                continue
-            for i, weight in enumerate(self.weights):
-                check_deadline(deadline, self.clock)
-                scalar = self._asf(point, weight)
-                minima[i] = scalar if minima[i] is None else min(minima[i], scalar)
-            seen.add(point)
-        check_deadline(deadline, self.clock)
-        self._seen, self._minima = seen, tuple(minima)
-        return sum(minima, Fraction(0))/len(minima)
+            check_deadline(deadline,self.clock)
+            current.add(point)
+            if point in self._seen:continue
+            self.check_point(point,deadline)
+            y=[]
+            for j,(x,o,s) in enumerate(zip(point,self.origin,self.scale)):
+                if j % 128 == 0:check_deadline(deadline,self.clock)
+                y.append((number(x)-o)/s)
+            for i,active in enumerate(self._active):
+                check_deadline(deadline,self.clock)
+                # Missing zero-weight coordinates contribute exactly zero.
+                # Keep this floor for arbitrary signed origins; do not use abs().
+                scalar=Fraction(0) if len(active)<self.dimensions else None
+                for k,(j,w) in enumerate(active):
+                    if k % 128 == 0:check_deadline(deadline,self.clock)
+                    v=w*y[j]
+                    scalar=v if scalar is None or v>scalar else scalar
+                minima[i]=scalar if minima[i] is None else min(minima[i],scalar)
+        total=sum(minima,Fraction(0))/len(minima)
+        check_deadline(deadline,self.clock)
+        self._seen,self._minima=current,tuple(minima)
+        return total

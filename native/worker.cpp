@@ -296,6 +296,7 @@ int main(){
             double sec;size_t limit,offset;std::cin>>sec>>limit>>offset;
             auto end=Clock::now()+std::chrono::duration_cast<Clock::duration>(std::chrono::duration<double>(sec));
             q.candidates.clear();auto base=q.x;
+            if(q.assignment.empty())limit=std::min(limit,2*base.size());
             for(size_t k=0;k<limit&&Clock::now()<end;++k){q.probe("neighbors");
                 if(!q.assignment.empty()){
                     size_t n=q.assignment.size(),a=(k+offset)%n,b=(a+1+(k+offset)/n%(n-1))%n;

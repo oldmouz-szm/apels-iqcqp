@@ -31,12 +31,13 @@ class ScipSession(NativeSession):
 
     def _send(self,command,**data):
         self.arm_deadline()
-        return self.request(json.dumps(dict(command=command,**data),separators=(',',':'),allow_nan=False),self.deadline)
+        return self.request(json.dumps(dict(command=command,deadline=min(self.deadline,time.monotonic()+3600),**data),separators=(',',':'),allow_nan=False),self.deadline)
 
     def load_model(self,model,input_limits=None):
         if self.model is not None:raise ValueError('model already loaded')
         source=model.source['path']
-        result=self._send('LOAD',path=source,sha256=model.source['sha256'])
+        from mo_iqcqp.experiment.resources import input_limits as checked_limits
+        result=self._send('LOAD',path=source,sha256=model.source['sha256'],input_limits=checked_limits(input_limits))
         self.model=model
         return result
 
@@ -51,9 +52,9 @@ class ScipSession(NativeSession):
         self.task=task
         return result
     def warm_start(self,x):return self._send('WARM',x=x)
-    def run_slice(self,seconds,steps=2**31-1):
+    def run_slice(self,seconds,steps=2**31-1,*,stop_on_feasible=False):
         seconds=max(0,min(seconds,self.deadline-time.monotonic()))
-        return self._send('SLICE',seconds=seconds)
+        return self._send('SLICE',seconds=seconds,stop_on_feasible=stop_on_feasible)
     def collect_candidates(self):return self._send('COLLECT')['x']
-    def neighbors(self,seconds,limit=64,offset=0):return self.run_slice(seconds)
+    def neighbors(self,seconds,limit=64,offset=0):return self._send('NEIGHBORS',seconds=seconds,limit=limit,offset=offset)
     def get_statistics(self):return self._send('STATS')

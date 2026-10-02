@@ -71,9 +71,11 @@ class NativeSession:
         return self.request(f'GUARD {remaining:.17g}',self.deadline)
 
     @staticmethod
-    def expression(expr):
+    def expression(expr,deadline=float('inf')):
         out=[str(len(expr.terms))]
-        for key,a in sorted(expr.terms.items()):out.append(f'{key[0] if key else -1} {key[1] if len(key)>1 else -1} {num(a)}')
+        for i,(key,a) in enumerate(sorted(expr.terms.items())):
+            if i % 128 == 0 and time.monotonic()>=deadline:raise TimeoutError('native serialization deadline')
+            out.append(f'{key[0] if key else -1} {key[1] if len(key)>1 else -1} {num(a)}')
         return '\n'.join(out)
 
     def load_model(self, model, input_limits=None):
@@ -89,8 +91,8 @@ class NativeSession:
         out=[f'LOAD {len(model.variables)} {len(model.objectives)} {len(model.constraints)} '
              f'{caps["max_variables"]} {caps["max_constraints"]} {caps["max_terms"]} {caps["max_expression_terms"]}']
         for v in model.variables:out.append(f'{int(v.kind=="B")} {int(v.lower is not None)} {num(v.lower or 0)} {int(v.upper is not None)} {num(v.upper or 0)}')
-        for e,d in zip(model.objectives,model.directions):out.append(self.expression(e.scaled(1 if d=='min' else -1)))
-        for c in model.constraints:out.append(f'{c.sense[0]} {num(c.rhs)}\n'+self.expression(c.expr))
+        for e,d in zip(model.objectives,model.directions):out.append(self.expression(e.scaled(1 if d=='min' else -1,self.deadline),self.deadline))
+        for c in model.constraints:out.append(f'{c.sense[0]} {num(c.rhs)}\n'+self.expression(c.expr,self.deadline))
         return self.request('\n'.join(out),self.deadline)
 
     def set_seed(self,seed):return self.request('SEED '+str(seed))
@@ -98,7 +100,7 @@ class NativeSession:
         self.arm_deadline()
         out=[f'STRUCTURE {len(structure["matrix"])} {len(structure["lifts"])}']
         out.extend(' '.join(map(str,row)) for row in structure['matrix'])
-        for j,e in structure['lifts'].items():out.append(str(j)+'\n'+self.expression(e))
+        for j,e in structure['lifts'].items():out.append(str(j)+'\n'+self.expression(e,self.deadline))
         return self.request('\n'.join(out),self.deadline)
     def set_task(self,weights,eps=None):
         eps=eps or [None]*len(weights)

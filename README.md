@@ -37,6 +37,8 @@ For Adaptive-R2, first freeze a model-specific R2 specification. The default use
   --output /path/to/new-r2-result.json
 ~~~
 
-Run .venv/bin/apels-iqcqp --help for CLI commands. The JSON result includes every original objective value, assignment, frozen configuration, worker request and resource records. High-dimensional HV is not computed unless a supported offline metric is explicitly requested. Current run and queue protocol is v9; saved content, interruption behavior and status codes are in docs/BATCH_SAFETY_SPEC.md.
+Run .venv/bin/apels-iqcqp --help for CLI commands. The JSON result includes every original objective value, assignment, frozen configuration, worker request and resource records. High-dimensional HV is not computed unless a supported offline metric is explicitly requested. Current run and queue protocol is v10; saved content, interruption behavior and status codes are in docs/BATCH_SAFETY_SPEC.md.
 
 This repository contains the solver only. No benchmark instances, example LPs, historical results, virtual environment or compiled binary are committed.
+
+The v10 engineering contract is in [docs/ENGINEERING_SPEC.md](docs/ENGINEERING_SPEC.md). Generic PLS is implemented for both backends; the optional Structure-enhanced variant requires LS-IQCQP. Runtime identity includes the actual SCIP installation when that backend is selected. The documented installation is a built source checkout with an optional editable Python install.

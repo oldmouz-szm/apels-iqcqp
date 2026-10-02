@@ -18,6 +18,7 @@ def objective_intervals(model,deadline=float('inf'),clock=time.monotonic):
         boxes.append((F(lo),F(hi)))
     ans=[]
     for expr,direction in zip(model.objectives,model.directions):
+        check_deadline(deadline,clock)
         lo=hi=F(0)
         for key,coefficient in expr.terms.items():
             check_deadline(deadline,clock);a=number(coefficient)
@@ -77,6 +78,7 @@ def validate_provenance(spec,model,origin,scale,deadline=float('inf'),clock=time
     if not isinstance(coords,list) or len(coords)!=m:raise ValueError('Coordinate provenance dimension')
     reliable=[]
     for j,c in enumerate(coords):
+        check_deadline(deadline,clock)
         if not isinstance(c,dict) or set(c)!={'L','U','unit','scale_kind','lower_bound_status','proof'}:raise ValueError('Invalid coordinate metadata')
         if any(type(c[k]) is not str or not c[k].strip() for k in ('unit','scale_kind','proof')):raise ValueError('Unit/proof required')
         status=c['lower_bound_status']

@@ -98,7 +98,7 @@ class WorkerPool:
             if remaining <= 0:
                 raise TimeoutError('Task setup reached global deadline')
             if task['kind'] == 'pls':
-                session.neighbors(remaining, 64, offset)
+                result['operator_diagnostics']=session.neighbors(remaining, 64, offset)
             else:
                 if task.get('bootstrap_strategy')=='persistent_unit_v2' and task.get('bootstrap_reason')=='empty_archive':
                     stats = session.run_slice(remaining, steps, stop_on_feasible=True)
