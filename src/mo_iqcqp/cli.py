@@ -1,6 +1,7 @@
 import argparse
 import json
-from .experiment.runner import run,queue,supervise
+from .experiment.runner import run,supervise
+from .experiment.batch import queue,prepare
 from .io import load_lp
 from .experiment.resources import INPUT_DEFAULTS
 
@@ -12,6 +13,8 @@ def run_lines(result,metrics=None,metric_error=False):
     """Only requested run fields and original objective vectors reach stdout."""
     archive=result.get('archive') or []
     yield 'instance='+_compact(result.get('source'))
+    yield 'status='+str(result.get('status','UNKNOWN'))
+    yield 'search_outcome='+str(result.get('search_outcome','UNKNOWN'))
     wall=result.get('actual_wall')
     yield 'wall_seconds='+('NA' if wall is None else f'{wall:.6f}')
     yield f'solution_count={len(archive)}'
@@ -47,6 +50,16 @@ def main():
         r.add_argument('--variant',choices=['Generic','Structure-enhanced'],default='Generic')
         r.add_argument('--algorithm-config')
     v=sub.add_parser('inspect');v.add_argument('path')
+    for key,default in INPUT_DEFAULTS.items():v.add_argument('--'+key.replace('_','-'),type=int,default=default)
+    b=sub.add_parser('prepare',help='freeze a batch manifest for a file or directory')
+    b.add_argument('path');b.add_argument('--output',required=True)
+    b.add_argument('--budget',type=float,default=60);b.add_argument('--seeds',default='1')
+    b.add_argument('--pattern',default='*.lp')
+    b.add_argument('--normalization',choices=['box','coefficient'],default='box')
+    b.add_argument('--variant',choices=['Generic','Structure-enhanced'],default='Generic')
+    for key,default in INPUT_DEFAULTS.items():b.add_argument('--'+key.replace('_','-'),type=int,default=default)
+    for key,default in dict(workers=1,core_budget=1,memory_mib=512,tree_memory_mib=640).items():
+        b.add_argument('--'+key.replace('_','-'),type=int,default=default)
     q=sub.add_parser('queue');q.add_argument('config');q.add_argument('--output',required=True)
     m=sub.add_parser('metrics');m.add_argument('--run',required=True);m.add_argument('--spec',required=True)
     m.add_argument('--source');m.add_argument('--output',required=True)
@@ -86,7 +99,7 @@ def main():
             from pathlib import Path
             if not Path(metric_spec).is_file():p.error(f'Metric specification does not exist: {metric_spec}')
         try:result=(supervise if cmd=='run' else run)(**a)
-        except FileExistsError as exc:p.exit(2,f'{p.prog}: {exc}\n')
+        except (ValueError,OSError) as exc:p.exit(2,f'{p.prog}: {exc}\n')
         if cmd=='run':
             metrics=None;metric_error=False
             if (metric_spec or hv_reference) and result['status']=='COMPLETED':
@@ -110,8 +123,20 @@ def main():
                              124 if result['status']=='HARD_TIMEOUT' else
                              3 if result['status'].startswith('RESOURCE_') else 2)
     elif cmd=='queue':
-        try:queue(**a,on_result=_show_run)
-        except RuntimeError as exc:p.exit(2,f'apels-iqcqp: {exc}\n')
+        try:summary=queue(**a,on_result=_show_run)
+        except (RuntimeError,ValueError,OSError) as exc:p.exit(2,f'{p.prog}: {exc}\n')
+        print('queue='+_compact(summary))
+        if summary['status']=='INTERRUPTED':raise SystemExit(130)
+        if summary['failed']:raise SystemExit(2)
+    elif cmd=='prepare':
+        try:
+            caps={key:a.pop(key) for key in INPUT_DEFAULTS}
+            resources={key:a.pop(key) for key in ('workers','core_budget','memory_mib','tree_memory_mib')}
+            a['seeds']=[int(s.strip()) for s in a['seeds'].split(',')]
+            summary=prepare(**a,caps=caps,resources=resources)
+        except (ValueError,OSError) as exc:p.exit(2,f'{p.prog}: {exc}\n')
+        print(_compact(summary))
+        if summary['preparation_errors']:raise SystemExit(2)
     elif cmd=='metrics':
         from pathlib import Path
         import os
@@ -129,4 +154,6 @@ def main():
             os.unlink(temporary)
         print('HV='+_compact(result['hv']['value']))
     else:
-        m=load_lp(a['path']);print(json.dumps({'variables':len(m.variables),'objectives':len(m.objectives),'constraints':len(m.constraints),'fingerprint':m.fingerprint(),'source':m.source},indent=2))
+        try:m=load_lp(**a)
+        except (ValueError,OSError) as exc:p.exit(2,f'{p.prog}: {exc}\n')
+        print(json.dumps({'variables':len(m.variables),'objectives':len(m.objectives),'constraints':len(m.constraints),'fingerprint':m.fingerprint(),'source':m.source},indent=2))

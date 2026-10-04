@@ -1,4 +1,4 @@
-# apels-iqcqp adaptive scheduling
+# Apels-IQCQP adaptive scheduling
 
 Adaptive-HV supports exactly two objectives. Feasibility search runs while the validated archive is empty and is not a bandit arm. Direction and PLS are eligible after one objective vector; epsilon requires two distinct vectors from the full archive, even if the scheduler work capacity is one.
 

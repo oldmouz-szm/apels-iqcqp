@@ -78,9 +78,8 @@ class WorkerPool:
         result = dict(token=token, task=task, worker=worker, candidates=[], continued=continued,
                       began=begin, error=None, timeout=False)
         try:
-            session.set_task(task['weights'], task['eps'])
-            if task['seed'] is not None and not continued:
-                session.warm_start(task['seed'])
+            session.set_task(task['weights'], task['eps'],
+                             warm=task['seed'] if not continued else None)
             result['setup_elapsed']=time.monotonic()-begin
             search_begin=time.monotonic()
             remaining = min(seconds, max(0., self.deadline-time.monotonic()-.003))

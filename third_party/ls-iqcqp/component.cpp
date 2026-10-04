@@ -225,7 +225,7 @@ namespace solver
     {
         Float bound = pcon->bound;
         int state;
-        if (pcon->is_equal) state == (con_delta == bound) ? 1 : 0;
+        if (pcon->is_equal) state = (con_delta == bound) ? 1 : 0;
         else if (pcon->is_less) state = (con_delta <= bound) ? 1 : 0;
         else state = (con_delta >= bound) ? 1 : 0;
         if (pcon->is_sat) state--;
@@ -260,6 +260,7 @@ namespace solver
 
     void qp_solver::no_operation_walk_unsat()
     {
+        if (_unsat_constraints.empty()) return;
         // return;
         polynomial_constraint * unsat_con;
         all_coeff * a_coeff;
@@ -270,6 +271,7 @@ namespace solver
         Float change_value;
         std::advance(unsat_cl_rand, rand() % _unsat_constraints.size());
         unsat_con = & (_constraints[* unsat_cl_rand]);
+        if (unsat_con->var_coeff.empty()) return;
         auto unsat_var_rand = unsat_con->var_coeff.begin();
         std::advance(unsat_var_rand, rand() % unsat_con->var_coeff.size());
         var_idx = unsat_var_rand->first;
@@ -847,7 +849,10 @@ namespace solver
                 change_value = _vars[var_idx].upper - _cur_assignment[var_idx];
         }
         if (change_value == 0) return false;
-        return true;
+        post_val = _cur_assignment[var_idx] + change_value;
+        if (!std::isfinite(post_val)) return false;
+        if (_vars[var_idx].is_int && post_val != round(post_val)) return false;
+        if (_vars[var_idx].is_bin && post_val != 0 && post_val != 1) return false;
         bool lower_sat = !_vars[var_idx].has_lower || post_val >= _vars[var_idx].lower;
         bool upper_sat = !_vars[var_idx].has_upper || post_val <= _vars[var_idx].upper;
         return lower_sat && upper_sat;
@@ -890,7 +895,10 @@ namespace solver
                 change_value = _vars[var_idx].upper - _cur_assignment[var_idx];
         }
         if (change_value == 0) return false;
-        return true;
+        post_val = _cur_assignment[var_idx] + change_value;
+        if (!std::isfinite(post_val)) return false;
+        if (_vars[var_idx].is_int && post_val != round(post_val)) return false;
+        if (_vars[var_idx].is_bin && post_val != 0 && post_val != 1) return false;
         bool lower_sat = !_vars[var_idx].has_lower || post_val >= _vars[var_idx].lower;
         bool upper_sat = !_vars[var_idx].has_upper || post_val <= _vars[var_idx].upper;
         return lower_sat && upper_sat;

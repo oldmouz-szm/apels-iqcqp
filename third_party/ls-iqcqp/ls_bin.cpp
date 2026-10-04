@@ -414,7 +414,7 @@ namespace solver
             if (li_var_idx != var_idx_2)
                 linear_coeff_value_1 += _cur_assignment[li_var_idx] * li_var_coeff;
             else 
-                both_coeff = li_var_coeff;
+                both_coeff += li_var_coeff;
         }
         linear_coeff_value_1 *= change_value_1; 
         for (int linear_pos = 0; linear_pos < coeff_2->obj_linear_coeff.size(); linear_pos++)
@@ -512,7 +512,7 @@ namespace solver
             if (li_var_idx != var_idx_2)
                 coeff_value += _cur_assignment[li_var_idx] * li_var_coeff;
             else
-                both_coeff = li_var_coeff;
+                both_coeff += li_var_coeff;
         }
         coeff_value = change_value_1 * coeff_value;
         for (int linear_pos = 0; linear_pos < var_2->obj_linear_coeff.size(); linear_pos++)
@@ -942,7 +942,7 @@ namespace solver
         else 
         {
             //down
-            if (!less && (pcon->value - fabs(linear_coeff_value)<= pcon->bound))
+            if (!less && (pcon->value - fabs(linear_coeff_value)>= pcon->bound))
             {
                 if (check_var_shift_bool(var_idx, change_value, rand_flag))
                 {
@@ -1080,6 +1080,7 @@ namespace solver
 
     void qp_solver::no_bound_sat_move()
     {
+        if (_object_monoials.empty()) return;
         var * obj_var;
         int var_idx;
         Float delta;

@@ -16,3 +16,13 @@ __pycache__/
 *.tmp
 /native/upstream.patch
 *.egg-info/
+
+# User datasets and generated experiment artifacts
+/benchmark/
+/benchmarks/
+/audit/
+*.lp
+*.mps
+*.dat
+core
+core.*

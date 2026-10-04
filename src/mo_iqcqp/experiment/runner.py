@@ -12,9 +12,12 @@ from mo_iqcqp.io import load_lp
 from mo_iqcqp.model import SCHEMA as MODEL_SCHEMA
 from mo_iqcqp.experiment.events import EventStream, inspect_event_log
 
-RUN_PROTOCOL='end-to-end-cold-ls-adaptive-v11'
-QUEUE_IDENTITY_SCHEMA='queue-run-ls-adaptive-v11'
+RUN_PROTOCOL='end-to-end-cold-ls-adaptive-v12'
+QUEUE_IDENTITY_SCHEMA='queue-run-ls-adaptive-v12'
 CONFIGURATION_SCHEMA='apels-effective-v3'
+
+class SearchFinished(Exception):
+    pass
 
 
 def canonical_json(value):
@@ -34,12 +37,14 @@ def implementation_fingerprint():
     root=Path(__file__).resolve().parents[3]
     h=hashlib.sha256()
     files=sorted((root/'src').rglob('*.py'))
-    files += [root/'native/worker.cpp',root/'scripts/build_native.py',root/'native/upstream.patch']
+    files += [root/'native/worker.cpp',root/'scripts/build_native.py']
+    files += sorted(p for p in (root/'third_party/ls-iqcqp').iterdir() if p.suffix in ('.h','.cpp'))
     for file in files:
         h.update(str(file.relative_to(root)).encode())
         h.update(file.read_bytes())
     native=Path(os.environ.get('MO_IQCQP_NATIVE') or root/'build/ls_worker')
-    return {'source_sha256':h.hexdigest(),'native_sha256':file_sha256(native),'controller_sha256':file_sha256(__file__)}
+    from mo_iqcqp.backends.build import verify
+    return {'source_sha256':h.hexdigest(),'native_sha256':verify(root,native),'controller_sha256':file_sha256(__file__)}
 
 
 def implementation_for_config(config,deadline=float('inf')):
@@ -127,8 +132,8 @@ def queue_run_identity(task,effective,source_sha,implementation,objective_dimens
     algorithm=task.get('algorithm','apels')
     if type(budget) not in (int,float) or not math.isfinite(budget) or budget<=0:
         raise ValueError('budget must be finite and positive')
-    if type(seed) is not int:
-        raise ValueError('seed must be an integer')
+    if type(seed) is not int or not 0<=seed<2**64:
+        raise ValueError('seed must be an unsigned 64-bit integer')
     if variant not in ('Generic','Structure-enhanced') or algorithm!='apels':
         raise ValueError('Unknown variant or algorithm')
     payload=dict(schema=QUEUE_IDENTITY_SCHEMA,protocol=RUN_PROTOCOL,model_schema=MODEL_SCHEMA,
@@ -289,6 +294,20 @@ def run(path,budget=10,seed=1,algorithm='apels',output=None,max_bytes=40_000_000
     # ASan reserves a huge virtual shadow; its explicit diagnostic mode still has RSS watchdog.
     sanitizer='sanitize' in os.environ.get('MO_IQCQP_NATIVE','')
     stream=EventStream(output)
+    def save_checkpoint():
+        nonlocal last_checkpoint
+        checkpoint_start=time.monotonic();stream.flush()
+        atomic_json(str(output)+'.checkpoint',dict(status='CHECKPOINT',started=start,
+            archive=list(archive.points.values()),validated_by_elapsed=time.monotonic()-start,
+            budget=budget,seed=seed,algorithm=algorithm,source=str(path),variant=variant,
+            implementation_fingerprint=impl,implementation_sha256=code_hash,protocol=RUN_PROTOCOL,
+            algorithm_configuration=config,queue_identity=queue_identity,input_limits=caps,
+            model_source=model.source,model_fingerprint=model_fp,
+            variable_names=[v.name for v in model.variables],original_directions=model.directions,
+            objective_dimension=len(model.objectives),first_feasible_elapsed=first_feasible,
+            events_log=stream.descriptor(),statistics=dict(metrics)))
+        metrics['checkpoint_wall']+=time.monotonic()-checkpoint_start
+        last_checkpoint=time.monotonic()
     try:
         os.sched_setaffinity(0,set(limits['affinity']))
         cap=limits['memory_mib']*1024**2
@@ -346,6 +365,26 @@ def run(path,budget=10,seed=1,algorithm='apels',output=None,max_bytes=40_000_000
             first_feasible=time.monotonic()-start
         from mo_iqcqp.search.adaptive import AdaptiveScheduler
         scheduler=AdaptiveScheduler(len(model.objectives),seed,config=config)
+        # A cheaply constructed feasible assignment is worth saving before
+        # native model loading; large cold starts may exhaust the remaining time.
+        if variant=='Generic':
+            initial=[]
+            for v in model.variables:
+                value=max(0,math.ceil(v.lower)) if v.lower is not None else 0
+                if v.upper is not None:value=min(value,math.floor(v.upper))
+                initial.append(value)
+            initial_task=dict(worker=None,task_id=None,scale_version=0,eps=[None]*len(model.objectives))
+            if admit(model,archive,dict(initial_task,x=initial),initial_task,deadline,start,metrics):
+                first_feasible=time.monotonic()-start
+        if archive.points and output:save_checkpoint()
+        for constraint in model.constraints:
+            if any(key for key in constraint.expr.terms):continue
+            delta=constraint.expr.terms.get((),0)-constraint.rhs
+            if (delta!=0 if constraint.sense=='=' else delta>0 if constraint.sense=='<=' else delta<0):
+                raise SearchFinished('CONSTANT_CONSTRAINT_INFEASIBLE')
+        if not model.variables:raise SearchFinished('CONSTANT_MODEL')
+        if archive.points and all(not any(key for key in expr.terms) for expr in model.objectives):
+            raise SearchFinished('CONSTANT_OBJECTIVES')
         pool=WorkerPool(model,limits['workers'],deadline,seed,structure,initial,input_limits=caps)
         from mo_iqcqp.search.bootstrap import PersistentBootstrap
         bootstrap=PersistentBootstrap(len(model.objectives),config['bootstrap_strategy'])
@@ -490,21 +529,13 @@ def run(path,budget=10,seed=1,algorithm='apels',output=None,max_bytes=40_000_000
                         error='NATIVE_TIMEOUT_BEFORE_GLOBAL_DEADLINE: '+str(result['error'])
                     raise TimeoutError(stop_reason)
             if output and time.monotonic()-last_checkpoint>=.5:
-                checkpoint_start=time.monotonic();stream.flush()
-                atomic_json(str(output)+'.checkpoint',dict(status='CHECKPOINT',started=start,
-                    archive=list(archive.points.values()),validated_by_elapsed=time.monotonic()-start,
-                    budget=budget,seed=seed,algorithm=algorithm,source=str(path),variant=variant,
-                    implementation_fingerprint=impl,implementation_sha256=code_hash,protocol=RUN_PROTOCOL,
-                    algorithm_configuration=config,queue_identity=queue_identity,input_limits=caps,
-                    model_source=model.source,model_fingerprint=model_fp,
-                    variable_names=[v.name for v in model.variables],original_directions=model.directions,
-                    objective_dimension=len(model.objectives),first_feasible_elapsed=first_feasible,
-                    events_log=stream.descriptor(),statistics=dict(metrics)))
-                metrics['checkpoint_wall']+=time.monotonic()-checkpoint_start
-                last_checkpoint=time.monotonic()
+                save_checkpoint()
+    except SearchFinished as e:stop_reason=str(e)
     except TimeoutError as e:stop_reason=str(e)
     except (Exception,KeyboardInterrupt) as e:
-        status='INTERRUPTED' if isinstance(e,KeyboardInterrupt) else 'ERROR';error=f'{type(e).__name__}: {e}'
+        status=('INTERRUPTED' if isinstance(e,KeyboardInterrupt) else
+                'RESOURCE_ADDRESS_SPACE_LIMIT' if isinstance(e,MemoryError) else 'ERROR')
+        error=f'{type(e).__name__}: {e}'
     finally:
         try:
             if output:atomic_json(str(output)+'.lifecycle',dict(stage='before-close',started=start,elapsed=time.monotonic()-start))
@@ -641,10 +672,11 @@ def supervise(path,budget=10,seed=1,algorithm='apels',output=None,max_bytes=40_0
             p.communicate()
     def recover(status, error):
         # A graceful stop may already have published a richer final result.
-        result=read_recovery(output,start,expected,path,caps)
+        recovery_deadline=start+budget+30.5
+        result=read_recovery(output,start,expected,path,caps,recovery_deadline)
         recovered='final' if result is not None else None
         if result is None:
-            result=read_recovery(str(output)+'.checkpoint',start,expected,path,caps)
+            result=read_recovery(str(output)+'.checkpoint',start,expected,path,caps,recovery_deadline)
             if result is not None:recovered='checkpoint'
         if result is None:
             result=dict(expected,archive=[],metadata_status='MODEL_NOT_LOADED_OR_NOT_CHECKPOINTED')
@@ -733,53 +765,7 @@ def supervise(path,budget=10,seed=1,algorithm='apels',output=None,max_bytes=40_0
 
 
 
+# Compatibility for Python callers; batch orchestration lives in its own module.
 def queue(config,output,on_result=None):
-    """Preflight is untimed; each dispatched supervise() remains one cold run."""
-    cfg=json.loads(Path(config).read_text())
-    if not isinstance(cfg,dict) or set(cfg)-{'jobs','workers','core_budget','memory_mib','tree_memory_mib','runs'}:
-        raise ValueError('Unknown queue configuration key')
-    out=Path(output);out.mkdir(parents=True,exist_ok=True)
-    queue_limits=plan(cfg)
-    if not isinstance(cfg.get('runs'),list):raise ValueError('Queue runs must be a list')
-    for task in cfg['runs']:
-        precheck_start=time.monotonic()
-        snapshot=effective_configuration(task.get('algorithm_config'))
-        if snapshot['core_budget']>queue_limits['core_budget']:
-            raise ValueError('Run core_budget exceeds queue core_budget')
-        caps=input_limits({key:task[key] for key in INPUT_DEFAULTS if key in task})
-        import stat
-        source_stat=Path(task['path']).stat()
-        if not stat.S_ISREG(source_stat.st_mode):raise ValueError('QUEUE_INPUT_MUST_BE_REGULAR_FILE')
-        if source_stat.st_size>caps['max_bytes']:raise ValueError('QUEUE_INPUT_BYTE_LIMIT')
-        source_sha=file_sha256(task['path'])
-        from mo_iqcqp.io.lp import ParseError
-        try:objective_dimension=len(load_lp(task['path'],**caps).objectives)
-        except ParseError:objective_dimension=None
-        identity=queue_run_identity(task,snapshot,source_sha,implementation_for_config(snapshot),objective_dimension)
-        digest=identity['digest']
-        attempt=0
-        while True:
-            name=digest+('.attempt-'+str(attempt) if attempt else '')+'.json'
-            dest=out/name
-            if not dest.exists():
-                if any(Path(str(dest)+suffix).exists() for suffix in
-                       ('.events.jsonl','.checkpoint','.lifecycle','.tmp','.request','.request.tmp','.unverified-final')):
-                    attempt+=1;continue
-                break
-            # Historical results without the new identity are preserved but never trusted.
-            try:previous=json.loads(dest.read_text())
-            except (OSError,ValueError):previous=None
-            if _identity_matches(previous,identity,dest):
-                dest=None;break
-            attempt+=1
-        if dest is None:continue
-        precheck_wall=time.monotonic()-precheck_start
-        dispatch={k:v for k,v in task.items() if k!='algorithm_config'}
-        result=supervise(**dispatch,algorithm_config=snapshot,queue_identity=identity,output=dest)
-        result['queue_precheck_wall']=precheck_wall
-        result['queue_precheck_scope']='configuration/source/implementation fingerprint, LP parse, result integrity and sample revalidation, resume lookup; excluded from cold-run clock'
-        atomic_json(dest,result)
-        if result.get('status')=='COMPLETED' and not _identity_matches(result,identity,dest):
-            raise RuntimeError('Completed queue result failed identity verification')
-        if on_result:on_result(result)
-        if result.get('status')!='COMPLETED':raise RuntimeError('QUEUE_STOPPED: '+str(result.get('status')))
+    from .batch import queue as dispatch
+    return dispatch(config,output,on_result)

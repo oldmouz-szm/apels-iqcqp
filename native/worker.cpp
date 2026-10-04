@@ -6,6 +6,7 @@
 #include <memory>
 #include <functional>
 #include <set>
+#include <map>
 using solver::qp_solver;
 using Clock=std::chrono::steady_clock;
 struct Term { int i,j; Float a; }; // -1,-1 constant; i,-1 linear
@@ -33,6 +34,7 @@ struct Session {
     std::vector<Candidate> candidates;
     std::vector<Float> last_observed;
     bool configured=false;
+    bool constant_infeasible=false;
     int max_expression_terms=500000;
     Clock::time_point global_deadline=Clock::time_point::max();
     Clock::time_point slice_deadline=Clock::time_point::max();
@@ -69,6 +71,9 @@ struct Session {
         if(t.j<0)s->_object_monoials.emplace_back(t.i,a,true);
         else if(t.i==t.j)s->_object_monoials.emplace_back(t.i,a,false);
         else s->_object_monoials.emplace_back(t.i,t.j,a,false);
+        const int index=s->_object_monoials.size()-1;
+        s->_vars[t.i].obj_monomials.push_back(index);
+        if(t.j>=0&&t.j!=t.i)s->_vars[t.j].obj_monomials.push_back(index);
         s->_vars_in_obj.insert(t.i);
         s->_vars[t.i].is_in_obj=true;
         if(t.j>=0){s->_vars_in_obj.insert(t.j);s->_vars[t.j].is_in_obj=true;s->is_obj_quadratic=true;}
@@ -88,22 +93,41 @@ struct Session {
             s->_vars[t.i].constraints.insert(p.index);
             if(t.j>=0){p.is_quadratic=true;if(t.j!=t.i){coeff(p.var_coeff[t.j],t.j,t.i,t.a);s->_vars[t.j].constraints.insert(p.index);}}
         }
+        // Constant constraints have no repair variable. Never pass them to a
+        // random-walk operator that samples var_coeff.
+        if(p.monomials.empty()){
+            constant_infeasible|=p.is_equal?p.bound!=0:p.is_less?p.bound<0:p.bound>0;
+            return;
+        }
+        for(const auto &entry:p.var_coeff)
+            if(s->_vars[entry.first].is_bin)p.p_bin_vars.push_back(entry.first);
         p.is_linear=!p.is_quadratic;s->is_cons_quadratic|=p.is_quadratic;
         s->avg_bound+=fabs(p.bound);s->_constraints.push_back(p);
     }
     void reset(bool preserve_rng=false){
         try{
-        check("reset");++resets;
+        check("reset");++resets;constant_infeasible=false;
         std::mt19937_64 rng=preserve_rng&&s?s->mo_rng:std::mt19937_64(seed);
         s=std::make_unique<qp_solver>();s->mo_rng=rng;s->mo_deadline=global_deadline;s->tabu_switch=0;s->_steps=0;s->problem_type=0;
         s->_best_steps=0;s->_object_weight=0;s->is_feasible=false;s->is_cur_feasible=false;
         for(size_t i=0;i<bounds.size();++i){
             probe("reset");
-            auto b=bounds[i];s->register_var("v"+std::to_string(i));auto&v=s->_vars.back();v.is_bin=b.binary;v.is_int=true;v.is_in_obj=false;v.has_lower=b.hl;v.has_upper=b.hu;v.lower=b.lo;v.upper=b.hi;v.is_constant=b.hl&&b.hu&&b.lo==b.hi;v.constant=b.lo;v.equal_bound=v.is_constant;
+            auto b=bounds[i];b.lo=ceil(b.lo);b.hi=floor(b.hi);
+            if(b.hl&&b.hu&&b.lo>b.hi)throw std::runtime_error("EMPTY_INTEGER_DOMAIN");
+            s->register_var("v"+std::to_string(i));auto&v=s->_vars.back();v.is_bin=b.binary;v.is_int=true;v.is_in_obj=false;v.has_lower=b.hl;v.has_upper=b.hu;v.lower=b.lo;v.upper=b.hi;v.is_constant=b.hl&&b.hu&&b.lo==b.hi;v.constant=b.lo;v.equal_bound=v.is_constant;
             s->_int_vars.insert(i);if(b.binary)s->_bool_vars.insert(i);
         }
-        for(size_t k=0;k<objs.size();++k)for(auto t:objs[k].terms){probe("reset");objective_term(t,weights[k]);}
-        // Aggregate repeated objective terms (especially cancelling directions) once.
+        // Each monomial and neighbour must occur once in the scalar objective.
+        // Paired moves and no-constraint scoring depend on this invariant.
+        std::map<std::pair<int,int>,Float> combined;
+        for(size_t k=0;k<objs.size();++k){
+            if(!weights[k])continue;
+            for(auto t:objs[k].terms){probe("reset");combined[{t.i,t.j}]+=t.a*weights[k];}
+        }
+        for(const auto &entry:combined){probe("reset");
+            if(!std::isfinite(entry.second))throw std::runtime_error("NONFINITE_SCALAR_OBJECTIVE");
+            objective_term({entry.first.first,entry.first.second,entry.second},1);
+        }
         for(size_t c=0;c<original.size();++c){probe("reset");constraint(original[c],"original:"+std::to_string(c));}
         for(size_t k=0;k<objs.size();++k)if(std::isfinite(eps[k])){probe("reset");constraint({objs[k],'<',eps[k]},"epsilon:"+std::to_string(k));}
         s->_cons_num=s->_constraints.size();s->_var_num=s->_vars.size();s->_bool_var_num=s->_bool_vars.size();s->_int_var_num=s->_int_vars.size();
@@ -161,7 +185,7 @@ struct Session {
         if(feasible){
             ++slice_original_feasible;
             if(first_feasible_monotonic<0){first_feasible_monotonic=std::chrono::duration<double>(Clock::now().time_since_epoch()).count();first_feasible_x=y;first_in_slice=true;}
-            Float score=0;for(size_t k=0;k<objs.size();++k){probe("collect",true);score+=weights[k]*eval(objs[k],y,true);}
+            Float score=0;for(size_t k=0;k<objs.size();++k){probe("collect",true);if(weights[k])score+=weights[k]*eval(objs[k],y,true);}
             if(!std::isfinite(score))score=std::numeric_limits<Float>::infinity();
             Candidate candidate{y,0,score,0,++candidate_serial};
             size_t best_count=0,worst=candidates.size();
@@ -205,7 +229,8 @@ struct Session {
         for(uint64_t i=0;i<limit&&Clock::now()<end&&!bootstrap_yield_ready;++i){
             auto safe=s->_cur_assignment;
             try{
-                if(s->_object_monoials.empty()&&s->_constraints.empty()){slice_reason="NO_SEARCH_TERMS";break;}
+                if(constant_infeasible){slice_reason="CONSTANT_CONSTRAINT_INFEASIBLE";break;}
+                if(s->_object_monoials.empty()&&s->is_cur_feasible){slice_reason="NO_SEARCH_TERMS";break;}
                 if(branch=="without_cons")s->mo_step_without_cons();
                 else if(branch=="bin")s->mo_step_bin();
                 else if(branch=="bin_new")s->mo_step_bin_new();
@@ -238,7 +263,7 @@ Expression read_expression(Session&q,int max_terms){Expression e;int n;std::cin>
         if(!std::isfinite(m.a))throw std::runtime_error("NONFINITE");e.terms.push_back(m);}
     return e;
 }
-void emit_x(const std::vector<Float>&x){std::cout<<'[';for(size_t i=0;i<x.size();++i){if(i)std::cout<<',';std::cout<<std::setprecision(21)<<x[i];}std::cout<<']';}
+void emit_x(const std::vector<Float>&x){std::cout<<'[';for(size_t i=0;i<x.size();++i){if(i)std::cout<<',';if(!std::isfinite(x[i]))throw std::runtime_error("NONFINITE_ASSIGNMENT");if(floor(x[i])==x[i])std::cout<<std::fixed<<std::setprecision(0)<<x[i]<<std::defaultfloat;else std::cout<<std::setprecision(21)<<x[i];}std::cout<<']'<<std::setprecision(17);}
 int main(){
     // Parent PID comes from the owning Python process; no system settings change.
     if(const char* expected=std::getenv("MO_IQCQP_EXPECTED_PARENT")){
@@ -273,10 +298,14 @@ int main(){
             for(int j=0;j<c;++j){q.probe("load");Con a;std::cin>>a.sense>>a.rhs;a.e=read_expression(q,max_expr);total+=a.e.terms.size();if(total>max_total)throw std::runtime_error("TOTAL_TERM_LIMIT");q.original.push_back(std::move(a));}
             q.weights.assign(m,1);q.eps.assign(m,std::numeric_limits<Float>::infinity());std::cout<<"{\"status\":\"LOADED\"}\n";
         }else if(cmd=="SEED"){std::cin>>q.seed;if(q.s)q.s->mo_seed(q.seed);std::cout<<"{\"status\":\"SEEDED\"}\n";
-        }else if(cmd=="TASK"){
+        }else if(cmd=="TASK"||cmd=="TASK_WARM"){
             q.check("reset");
-            for(auto&w:q.weights)std::cin>>w;
+            for(auto&w:q.weights){std::cin>>w;if(!std::isfinite(w)||w<0)throw std::runtime_error("INVALID_WEIGHT");}
             for(auto&e:q.eps){int on;Float v;std::cin>>on>>v;e=on?v:std::numeric_limits<Float>::infinity();}
+            if(cmd=="TASK_WARM"){
+                ++q.warms;
+                for(size_t i=0;i<q.x.size();++i){q.probe("reset");Float y;std::cin>>y;auto b=q.bounds[i];if(!std::isfinite(y)||floor(y)!=y||(b.hl&&y<b.lo)||(b.hu&&y>b.hi))throw std::runtime_error("INVALID_WARM_START");q.x[i]=y;}
+            }
             q.reset(true);q.configured=true;++q.tasks;q.candidates.clear();q.last_bootstrap_export.clear();std::cout<<"{\"status\":\"TASK_SET\",\"branch\":\""<<q.branch<<"\"}\n";
         }else if(cmd=="WARM"){
             q.check("reset");++q.warms;
@@ -325,4 +354,5 @@ int main(){
         if(!std::cin)throw std::runtime_error("PROTOCOL_PARSE_ERROR");
         std::cout.flush();
     }catch(const std::exception &e){std::cout<<"{\"status\":\"ERROR\",\"error\":\""<<e.what()<<"\"}\n"<<std::flush;return 2;}}
+    return 0;
 }

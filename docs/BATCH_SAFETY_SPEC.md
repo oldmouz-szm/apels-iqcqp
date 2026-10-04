@@ -1,6 +1,6 @@
-# Batch safety contract — v11 (2026-10-02)
+# Apels-IQCQP batch safety contract — v12
 
-The seven earlier batch-safety guarantees remain in force. LS move rules, exact original-model validation, signed ASF, fixed R2 normalization and UCB/window semantics are retained. Current operator completion and epsilon rotation changes are specified in ENGINEERING_SPEC.md.
+Each run owns its process tree, resources, frozen request and result artifacts. Exact original-model validation and fixed reward coordinates remain mandatory.
 
 ## Process ownership
 
@@ -10,7 +10,7 @@ On Linux, each managed child receives its creator PID and arms PR_SET_PDEATHSIG(
 
 The supervisor writes an exclusive `<output>.request` JSON sidecar and passes only its pathname and SHA256 through argv. The child verifies schema, invocation start, content digest and mutual exclusion with legacy inline arguments before use. The verified request file is the only preexisting output artifact accepted by the child. The sidecar freezes effective algorithm/resource configuration and queue identity, including actual objective dimension, input/source/native hashes and reward specification. Large finite-dimensional configurations no longer hit Linux's per-argument size cap. Parsing, allocation and hashing still cost real time/memory and can exhaust resources.
 
-Run protocol: `end-to-end-cold-ls-adaptive-v11`. Queue schema: `queue-run-ls-adaptive-v11`. Existing v7/v8/v9/v10 results remain historical and are never reused as v11.
+Run protocol: `end-to-end-cold-ls-adaptive-v12`. Queue schema: `queue-run-ls-adaptive-v12`. Results from other protocol versions are never reused.
 
 ## Saved content, resume and recovery
 
@@ -24,12 +24,12 @@ With enabled_arms=["epsilon"], a single archive vector triggers bounded feasibil
 
 ## Exit codes and queue behavior
 
-Single-run exit codes: COMPLETED=0, ERROR=2, HARD_TIMEOUT=124, INTERRUPTED=130, RESOURCE_*=3. Abnormal statuses are printed on stderr while existing successful stdout fields remain compatible. COMPLETED with no feasible sample still means the search completed, not a proof of infeasibility. Queue stops on a non-COMPLETED run and exits nonzero (currently 2), preserving the status in JSON. Resuming requires another explicit invocation; there is no unbounded retry loop.
+Single-run exit codes: COMPLETED=0, ERROR=2, HARD_TIMEOUT=124, INTERRUPTED=130, RESOURCE_*=3. Abnormal statuses are printed on stderr while existing successful stdout fields remain compatible. COMPLETED with no feasible sample still means the search completed, not a proof of infeasibility. Queue continues after instance failures by default; `continue_on_error: false` enables fail-fast behavior. It writes `queue-summary.json` incrementally, including preparation errors, failed prechecks, reused runs and result paths. A queue with failures exits 2; interruption exits 130 and stops further dispatch. Each failed attempt is retried at most once per explicit queue invocation. Relative input/configuration paths resolve against the manifest directory. An advisory output-directory lock prevents simultaneous queues, and the manifest hash rejects accidental reuse of another queue's output directory.
 
-## Acceptance and limits
+## Limits and preparation
 
-The development checkout retains the acceptance logs and independent audit artifacts. Tests cover coordinator death before the first sample, supervisor SIGKILL cascade, Ctrl-C with a newer final result, checkpoint recovery, blocked parsing, resource-stop/exit codes, request corruption, malformed or tampered saved samples, 200D queue transport, adaptive second-witness acquisition. Short cold functional runs validated fresh source/config/result artifacts and 1/2/4-worker execution in the development checkout.
+`prepare` references external LP files without copying them. It freezes per-instance normalization and accepts the same explicit input caps as `run`. It records model preparation errors while retaining valid tasks. The optional coefficient normalization uses fixed, unproved search units and never invents variable bounds. Preparation and queue preflight are outside the cold-run budget, but their parsing/normalization enforce a temporary per-process address-space cap. Preflight memory exhaustion is recorded as `RESOURCE_PRECHECK_MEMORY_LIMIT` without blocking later inputs; worker allocation exhaustion returns `RESOURCE_ADDRESS_SPACE_LIMIT`.
 
-These are engineering gates, not evidence of quality superiority or parallel speedup. Large archives still require full exact validation, result serialization and O(|A|^2 m) resume nondominance checking. RSS observations are sampled, not a strict instantaneous tree cap; per-process RLIMIT_AS remains enforced. No new 300-second performance comparison is included. Begin subsequent large experiments with a separately frozen small real-input pilot, then expand only after its independent audit succeeds.
+A validated initial assignment is checkpointed before native model loading. Search, parsing and native requests share the global run deadline. Recovery sample revalidation stops at the reporting deadline (budget plus 30.5 seconds); samples that cannot be verified within it are not retained. JSON serialization, opaque library calls and filesystem operations are not hard-real-time. Inspect `supervisor_wall` and status in addition to budget.
 
-Current deadline granularity, exact R2 optimizations are specified in ENGINEERING_SPEC.md.
+Large archives require full exact validation, serialization and quadratic pairwise nondominance checks on resume. RSS limits are sampled; each process also has RLIMIT_AS. Resource settings are explicit and must fit observed machine headroom. Serial instance dispatch (`jobs=1`) prevents oversubscription, with multiple native workers allowed within each run's declared core budget.

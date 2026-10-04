@@ -2,6 +2,7 @@
 import math
 import os
 import resource
+from contextlib import contextmanager
 from pathlib import Path
 
 # Defaults protect the laptop. The upper bounds are implementation/protocol
@@ -12,6 +13,18 @@ INPUT_DEFAULTS = dict(max_bytes=40_000_000, max_terms=500_000,
 INPUT_HARD = dict(max_bytes=2**63-1, max_terms=20_000_000,
                   max_variables=100_000, max_constraints=100_000,
                   max_expression_terms=1_000_000)
+
+@contextmanager
+def preparation_memory_limit(memory_mib):
+    """Bound untimed parsing/normalization too, and restore the caller's limit."""
+    previous=resource.getrlimit(resource.RLIMIT_AS)
+    cap=memory_mib*1024**2
+    if previous[0]>=0:cap=min(cap,previous[0])
+    if previous[1]>=0:cap=min(cap,previous[1])
+    try:
+        resource.setrlimit(resource.RLIMIT_AS,(cap,previous[1]))
+        yield
+    finally:resource.setrlimit(resource.RLIMIT_AS,previous)
 
 
 def input_limits(values=None):

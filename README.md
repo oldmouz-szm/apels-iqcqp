@@ -1,39 +1,67 @@
-# apels-iqcqp: multiobjective integer quadratic solver
+# Apels-IQCQP
 
-A Python coordinator runs persistent C++ LS-IQCQP workers, validates every saved assignment against the original integer quadratic model with exact rational arithmetic, and maintains the complete nondominated sample archive. Adaptive-R2 accepts any finite objective count m ≥ 2 within actual resource limits. Legacy Adaptive-HV is supported for two objectives.
+Apels-IQCQP is an approximate multiobjective integer quadratic solver. The **A** in Apels means Adaptive. A Python coordinator schedules persistent C++ LS-IQCQP workers, validates saved assignments with exact rational arithmetic, and maintains a nondominated sample archive.
 
-The output contains validated heuristic samples. It does not certify a full Pareto front, global optimum, or infeasibility. Supported inputs are the documented LP integer quadratic model class; continuous variables and arbitrary nonlinear expressions are outside this release.
+The default R2 scheduler supports any finite objective count **m >= 2**, subject to configured time, memory and input limits. Inputs may have binary/general integer variables, mixed minimization/maximization objectives and quadratic constraints. See [the input contract](docs/INPUT_CONTRACT.md) for the supported LP dialect.
 
-## Build
+## Build on Linux / WSL
 
-On Ubuntu/Linux, install Python 3.11+, g++ with C++17, and GSL headers/libraries. The bundled LS-IQCQP source retains its upstream MIT license in third_party/ls-iqcqp/LICENSE.
+Requires Python 3.11+, g++ (C++17), and GSL headers/libraries. On Ubuntu the system packages are `python3-venv`, `g++`, and `libgsl-dev`.
 
-~~~bash
+```bash
 python3 -m venv .venv
-.venv/bin/python scripts/build_native.py
 .venv/bin/python -m pip install -e .
-~~~
+.venv/bin/python scripts/build_native.py
+```
 
-The build generates build/ls_worker and native/upstream.patch in this checkout. Python run-time dependencies are from the standard library.
+Build products stay in `build/`. The solver rejects a stale or modified native binary; rebuild after changing native sources or the build script. The supported installation is a built source checkout, optionally installed editable. Python runtime dependencies are standard library only. The bundled LS-IQCQP source retains its [MIT license](third_party/ls-iqcqp/LICENSE).
 
-## Run
+## Batch runs
 
-Provide your own LP input; see docs/INPUT_CONTRACT.md. Every output path must be new.
+`prepare` scans a directory recursively, freezes one R2 specification per model, and writes a manifest for all requested seeds. It references absolute source paths without copying any input. Preparation errors are recorded and valid models remain runnable. Use `--pattern` to select a subset.
 
-For Adaptive-R2, first freeze a model-specific R2 specification. The default uses exact finite integer-box bounds; models without such bounds require explicit finite origin, positive scale, and coordinate metadata as described in docs/MANY_OBJECTIVE_SPEC.md. Supply the generated JSON in an algorithm configuration with scheduler_mode set to adaptive_r2 and r2_spec set to that JSON object.
+For example, the following permits large sparse models and allocates one worker/core, up to 2 GiB virtual memory per process and 3 GiB resident memory for the process tree:
 
-~~~bash
-.venv/bin/python scripts/generate_r2_spec.py \
-  /path/to/model.lp /path/to/new-r2-spec.json
-.venv/bin/python -c 'import json,sys; json.dump({"scheduler_mode":"adaptive_r2","r2_spec":json.load(open(sys.argv[1]))},open(sys.argv[2],"x"),indent=2)' \
-  /path/to/new-r2-spec.json /path/to/new-r2-config.json
-.venv/bin/apels-iqcqp run /path/to/model.lp \
-  --budget 60 --seed 1 --algorithm-config /path/to/new-r2-config.json \
-  --output /path/to/new-r2-result.json
-~~~
+```bash
+.venv/bin/apels-iqcqp prepare /mnt/d/path/to/benchmark \
+  --pattern '*.lp' --budget 60 --seeds 1,2,3 \
+  --max-terms 1500000 --max-expression-terms 1000000 \
+  --memory-mib 2048 --tree-memory-mib 3072 \
+  --output /path/outside/repo/batch.json
+.venv/bin/apels-iqcqp queue /path/outside/repo/batch.json \
+  --output /path/outside/repo/results
+```
 
-Run .venv/bin/apels-iqcqp --help for CLI commands. The JSON result includes every original objective value, assignment, frozen configuration, worker request and resource records. High-dimensional HV is not computed unless a supported offline metric is explicitly requested. Current run and queue protocol is v11; saved content, interruption behavior and status codes are in docs/BATCH_SAFETY_SPEC.md.
+Choose resource values that fit the host. Untimed preparation and queue preflight parsing also enforce the per-process memory limit and report failures per input. Multiple native workers can be requested with `--workers 2 --core-budget 2`; instances run serially (`jobs=1`) to keep resource ownership explicit. All input-limit flags are shared by `prepare`, `inspect`, `run` and `scripts/generate_r2_spec.py`.
 
-This repository contains the solver only. No benchmark instances, example LPs, historical results, virtual environment or compiled binary are committed.
+Default normalization (`--normalization box`) derives exact objective intervals from finite integer variable boxes. For models whose objective variables lack finite bounds, either provide explicit units via `scripts/generate_r2_spec.py --explicit`, or select **`--normalization coefficient`** when preparing the batch. This uses the objective constant as origin and the L1 norm of nonconstant coefficients as a positive fixed scale. It is a search heuristic, does not assert objective bounds and does not alter variable domains. The choice is recorded in every result.
 
-The engineering contract is in [docs/ENGINEERING_SPEC.md](docs/ENGINEERING_SPEC.md). The only search backend is LS-IQCQP; scheduling is adaptive. Default scheduler_mode is adaptive_r2 and requires a model-specific r2_spec. Use scheduler_mode=adaptive with an hv_spec for legacy 2D HV feedback. Obsolete scheduling/backend configurations are rejected. The supported installation is a built source checkout, optionally installed editable.
+By default a failed instance does not stop later runs. `queue-summary.json` records each status, result path, sample count, error and reuse decision. Exit 2 indicates at least one failure or preparation error. Set `continue_on_error: false` in the manifest for fail-fast operation. Ctrl-C stops the queue with exit 130.
+
+Repeat the same `queue` command to resume: matching successful runs are independently verified and reused, failed or damaged attempts receive new filenames. Existing results are preserved. An output directory accepts only one manifest and one active queue. To change the budget/configuration, use a new output directory.
+
+## Single runs and results
+
+`prepare` also accepts a single LP file. Alternatively, generate a fixed specification, place it in an algorithm configuration under `r2_spec`, and invoke:
+
+```bash
+.venv/bin/apels-iqcqp run /path/to/model.lp --budget 60 --seed 1 \
+  --algorithm-config /path/to/config.json --output /path/to/new-result.json
+```
+
+Each output path must be new. Results contain original objective vectors, assignments, the frozen configuration, timing and resource observations. A cheap initial assignment is validated and checkpointed before native startup. Search accepts samples only before the global deadline; cleanup, recovery and serialization can add reporting time. `COMPLETED` with `NO_FEASIBLE_SAMPLES_FOUND` is an explicit empty result, not an optimality or general infeasibility claim. High-dimensional HV is not needed to solve; optional offline exact HV supports 2-4 objectives.
+
+See [batch safety](docs/BATCH_SAFETY_SPEC.md), [engineering details](docs/ENGINEERING_SPEC.md), and [R2 normalization](docs/MANY_OBJECTIVE_SPEC.md). Run/queue identity is v12 and versioned fingerprints prevent reuse of results produced by a different implementation.
+
+## Verification
+
+Regression tests construct temporary inputs and remove their artifacts:
+
+```bash
+.venv/bin/python -m unittest discover -s tests -v
+.venv/bin/python scripts/test_native.py
+.venv/bin/python scripts/build_native.py --sanitize
+.venv/bin/python scripts/test_native.py --sanitize
+```
+
+The repository contains solver source, current documentation, build tooling and regression test source only. Benchmark files, generated examples, logs, historical reports, results, virtual environments and binaries are not committed. Store experiments outside the checkout.

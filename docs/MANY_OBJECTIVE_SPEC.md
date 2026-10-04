@@ -1,4 +1,4 @@
-# apels-iqcqp many-objective specification
+# Apels-IQCQP many-objective specification
 
 ## Scope and compatibility
 
@@ -37,7 +37,7 @@ Both Adaptive modes retain the latest 30 valid arm completions, `sum(gain)/sum(s
 
 Exact offline HV remains available for 2–4 objectives when explicitly requested and correctly referenced. High-dimensional success does not compute HV. Without an HV request, output says `HV=NOT_COMPUTED`; it never substitutes zero. Adaptive-R2 results record the reward type, spec hash, direction and exact online value if a complete in-budget cache exists, otherwise `NOT_COMPUTED`. Saved assignments contain all original and internal objective values and variable mapping. Independent post-run enumeration and R2 evaluation belong to the development report, not the timed online reward.
 
-The method combines known multi-directional local search, adaptive operator selection and R2 indicator ideas; dimension generality alone is not a claim of new theory. Relevant prior work includes [MDLS](https://prolog.univie.ac.at/research/MDLS/), [FRRMAB](https://colalab.ai/publications/LiFKZ14.pdf), and [Adaptive MOLS](https://discovery.ucl.ac.uk/id/eprint/10068495/1/lion_2018_preprint.pdf). The first A in APELS denotes Adaptive; the project name is apels-iqcqp.
+The method combines known multi-directional local search, adaptive operator selection and R2 indicator ideas; dimension generality alone is not a claim of new theory. Relevant prior work includes [MDLS](https://prolog.univie.ac.at/research/MDLS/), [FRRMAB](https://colalab.ai/publications/LiFKZ14.pdf), and [Adaptive MOLS](https://discovery.ucl.ac.uk/id/eprint/10068495/1/lion_2018_preprint.pdf). The first A in APELS denotes Adaptive; the project name is Apels-IQCQP.
 
 ## Current engineering implementation
 
@@ -45,4 +45,4 @@ See ENGINEERING_SPEC.md. The default persistent_unit_v2 uses fixed unit-directio
 
 Origin/scale/weights are frozen and reliable-bound breaches stop with an audit record. The exact signed ASF formula is unchanged. Sparse active-weight evaluation and one normalization per new vector reduce arithmetic work; bounded cache keys retain only the current full archive. Deadline checks protect transactional admission and cache commits.
 
-The source, actual native and coordinator hashes, actual m, bootstrap/reward content enter v11 identity. Old results are never reused. Finite-weight R2 is not HV, can miss a Pareto improvement and does not certify the full front. No standard UCB1 regret guarantee is claimed. The definition follows Wagner, Trautmann and Brockhoff (2013), Eq.(1), https://www.cmap.polytechnique.fr/~dimo.brockhoff/publicationListFiles/wtb2013a.pdf; normalization and conservative bounds are engineering choices.
+The source, actual native and coordinator hashes, actual m, bootstrap/reward content enter v12 identity. Old results are never reused. Finite-weight R2 is not HV, can miss a Pareto improvement and does not certify the full front. No standard UCB1 regret guarantee is claimed. The definition follows Wagner, Trautmann and Brockhoff (2013), Eq.(1), https://www.cmap.polytechnique.fr/~dimo.brockhoff/publicationListFiles/wtb2013a.pdf; normalization and conservative bounds are engineering choices.

@@ -8,22 +8,28 @@ import signal
 import subprocess
 import time
 import tempfile
+from decimal import Decimal, localcontext
 from mo_iqcqp.experiment.resources import input_limits as checked_input_limits
 
 ROOT=Path(__file__).resolve().parents[3]
 def num(value):
-    try:converted=float(value)
-    except (OverflowError,ValueError) as exc:
+    # Do not route exact integers/rationals through binary64 first: the worker
+    # uses long double, including its wider exact-integer range.
+    try:
+        with localcontext() as ctx:
+            ctx.prec=25
+            converted=(Decimal(value.numerator)/Decimal(value.denominator)
+                       if hasattr(value,'numerator') else Decimal(str(value)))
+    except (ArithmeticError,ValueError) as exc:
         raise ValueError('Native protocol coordinate is outside finite floating range') from exc
-    if not math.isfinite(converted):
-        raise ValueError('Native protocol coordinate must be finite')
-    return format(converted,'.18g')
+    if not converted.is_finite() or not math.isfinite(converted):
+        raise ValueError('Native protocol coordinate must fit the finite binary64 input range')
+    return str(converted)
 
 class NativeSession:
     def __init__(self, deadline=float('inf'), executable=None):
         self.deadline=deadline
-        cache=ROOT/'data/cache';cache.mkdir(parents=True,exist_ok=True)
-        self.diagnostics=tempfile.TemporaryFile(dir=cache)
+        self.diagnostics=tempfile.TemporaryFile()
         from mo_iqcqp.experiment.lifecycle import child_environment
         self.process=subprocess.Popen([str(executable or os.environ.get('MO_IQCQP_NATIVE') or ROOT/'build/ls_worker')],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=self.diagnostics,start_new_session=True,bufsize=0,env=child_environment())
         self.buffer=b'';self.selector=selectors.DefaultSelector();self.selector.register(self.process.stdout,selectors.EVENT_READ)
@@ -90,7 +96,10 @@ class NativeSession:
         self.model=model
         out=[f'LOAD {len(model.variables)} {len(model.objectives)} {len(model.constraints)} '
              f'{caps["max_variables"]} {caps["max_constraints"]} {caps["max_terms"]} {caps["max_expression_terms"]}']
-        for v in model.variables:out.append(f'{int(v.kind=="B")} {int(v.lower is not None)} {num(v.lower or 0)} {int(v.upper is not None)} {num(v.upper or 0)}')
+        for v in model.variables:
+            lo=math.ceil(v.lower) if v.lower is not None else 0
+            hi=math.floor(v.upper) if v.upper is not None else 0
+            out.append(f'{int(v.kind=="B")} {int(v.lower is not None)} {num(lo)} {int(v.upper is not None)} {num(hi)}')
         for e,d in zip(model.objectives,model.directions):out.append(self.expression(e.scaled(1 if d=='min' else -1,self.deadline),self.deadline))
         for c in model.constraints:out.append(f'{c.sense[0]} {num(c.rhs)}\n'+self.expression(c.expr,self.deadline))
         return self.request('\n'.join(out),self.deadline)
@@ -102,13 +111,18 @@ class NativeSession:
         out.extend(' '.join(map(str,row)) for row in structure['matrix'])
         for j,e in structure['lifts'].items():out.append(str(j)+'\n'+self.expression(e,self.deadline))
         return self.request('\n'.join(out),self.deadline)
-    def set_task(self,weights,eps=None):
+    def set_task(self,weights,eps=None,warm=None):
         eps=eps or [None]*len(weights)
         if len(weights)!=len(self.model.objectives) or len(eps)!=len(weights):raise ValueError('task dimension')
         task=(tuple(weights),tuple(eps))
-        if self.task==task:return {'status':'TASK_CONTINUED'}
+        if self.task==task:
+            return self.warm_start(warm) if warm is not None else {'status':'TASK_CONTINUED'}
+        if warm is not None and len(warm)!=len(self.model.variables):raise ValueError('warm start dimension')
         self.arm_deadline()
-        r=self.request('TASK '+' '.join(num(w) for w in weights)+' '+' '.join(f'{int(e is not None)} {num(e or 0)}' for e in eps),self.deadline)
+        command='TASK_WARM' if warm is not None else 'TASK'
+        text=command+' '+' '.join(num(w) for w in weights)+' '+' '.join(f'{int(e is not None)} {num(e or 0)}' for e in eps)
+        if warm is not None:text+=' '+' '.join(num(y) for y in warm)
+        r=self.request(text,self.deadline)
         self.task=task;return r
     def warm_start(self,x):
         if len(x)!=len(self.model.variables):raise ValueError('warm start dimension')

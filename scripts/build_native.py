@@ -1,7 +1,9 @@
 """Reproducible audited patch generation; never writes to the original installation."""
 from pathlib import Path
-import difflib, hashlib, json, os, re, shutil, subprocess, sys
+import hashlib, json, os, re, subprocess, sys, tempfile
 ROOT=Path(__file__).resolve().parents[1]
+sys.path.insert(0,str(ROOT/'src'))
+from mo_iqcqp.backends.build import source_hash,sha256
 SRC=ROOT/'third_party/ls-iqcqp'; BUILD=ROOT/'build'; PATCHED=BUILD/'ls'
 
 BUILD.mkdir(exist_ok=True);SRC.mkdir(parents=True,exist_ok=True);PATCHED.mkdir(exist_ok=True)
@@ -51,11 +53,9 @@ for filename,func,short in branches:
     core=re.sub(r'if\s*\(_steps % 1000 == 0 && \(TimeElapsed\(\) > _cut_off\)\)\s*(?:\{[\s\S]*?break;\s*\}|break;)', '',core)
     stepdefs.append('void qp_solver::mo_step_'+short+'(){\n'+prefix+core+'\n++_steps;\n}')
 
-patch=[]
 for p in SRC.iterdir():
     if p.suffix not in ('.h','.cpp'):continue
     old=p.read_text();s=strip_comments(old)
-    s=s.replace('state == (con_delta == bound) ? 1 : 0','state = (con_delta == bound) ? 1 : 0')
     if p.suffix=='.cpp':
         s=re.sub(r'\b(?:std\s*::\s*)?cout\b','std::cerr',s)
         s=re.sub(r'\b(?:std::)?srand\(', 'mo_seed(',s)
@@ -80,16 +80,22 @@ for p in SRC.iterdir():
         void mo_step_without_cons(); void mo_step_bin_new(); void mo_step_bin(); void mo_step_mix_balance();
         ~qp_solver(){for(auto &v:_vars) delete v.recent_value;}
 ''')
-        s=s.replace('= INT32_MAX;', '= std::numeric_limits<Float>::infinity();',1) if False else s
         s=s.replace('_best_object_value = INT32_MAX','_best_object_value = std::numeric_limits<Float>::infinity()')
     if p.name=='util.h':s='#include <random>\n#include <limits>\n#include <stdexcept>\n#include <functional>\n'+s
     (PATCHED/p.name).write_text(s)
-    patch.extend(difflib.unified_diff(old.splitlines(True),s.splitlines(True),fromfile='a/'+p.name,tofile='b/'+p.name))
 steps='#include "sol.h"\nnamespace solver {\n'+ '\n'.join(stepdefs)+'\n}\n'
 (PATCHED/'steps.cpp').write_text(instrument(steps))
-(ROOT/'native/upstream.patch').write_text(''.join(patch))
 sources=[str(PATCHED/f) for f in ['ls_read.cpp','ls_no_cons.cpp','ls_bin.cpp','component.cpp','ls_mix_not_dis.cpp','ls_balance.cpp','steps.cpp']]
 cmd=['g++','-std=c++17','-O2','-g','-fno-omit-frame-pointer','-I'+str(PATCHED),*sources,str(ROOT/'native/worker.cpp'),'-lgsl','-lgslcblas','-lm','-o',str(BUILD/'ls_worker')]
 if '--sanitize' in sys.argv:cmd[2:2]=['-fsanitize=address,undefined'];cmd[-1]=str(BUILD/'ls_worker_sanitize')
 print(' '.join(cmd),flush=True)
-subprocess.run(cmd,check=True)
+target=Path(cmd[-1]);fd,temporary=tempfile.mkstemp(prefix=target.name+'-',dir=BUILD)
+os.close(fd);cmd[-1]=temporary
+try:
+    subprocess.run(cmd,check=True)
+    os.replace(temporary,target)
+finally:
+    Path(temporary).unlink(missing_ok=True)
+target.with_suffix('.manifest.json').write_text(json.dumps(dict(
+    source_sha256=source_hash(ROOT),binary_sha256=sha256(target),
+    compiler=subprocess.check_output(['g++','--version'],text=True).splitlines()[0]),indent=2)+'\n')

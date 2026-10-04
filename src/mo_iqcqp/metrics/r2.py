@@ -23,7 +23,8 @@ class FixedR2:
         if new:required=required|{'normalization_provenance'}
         if not isinstance(spec, dict) or set(spec) != required or spec['schema'] not in (self.schema,SCHEMA):
             raise ValueError('Invalid fixed R2 specification')
-        if (spec['model_fingerprint'] != model.fingerprint() or
+        fingerprint=model.fingerprint()
+        if (spec['model_fingerprint'] != fingerprint or
                 spec['source_sha256'] != model.source['sha256'] or
                 spec['objective_directions'] != model.directions):
             raise ValueError('R2 specification source/model/direction mismatch')
@@ -53,7 +54,7 @@ class FixedR2:
         self._active=tuple(tuple((j,w) for j,w in enumerate(row) if w) for row in self.weights)
         if any(any(v < 0 for v in w) or sum(w) != 1 for w in self.weights):
             raise ValueError('R2 weights must be nonnegative and sum to one')
-        self.reliable_lower=(validate_provenance(spec,model,self.origin,self.scale,deadline,clock) if new else (None,)*self.dimensions)
+        self.reliable_lower=(validate_provenance(spec,model,self.origin,self.scale,deadline,clock,fingerprint) if new else (None,)*self.dimensions)
         self._seen = set()
         self._minima = None
         check_deadline(deadline, clock)

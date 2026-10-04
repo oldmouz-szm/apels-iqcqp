@@ -15,18 +15,18 @@ def objective_intervals(model,deadline=float('inf'),clock=time.monotonic):
         if v.lower is None or v.upper is None:boxes.append(None);continue
         lo,hi=math.ceil(number(v.lower)),math.floor(number(v.upper))
         if lo>hi:raise ValueError('Empty integer box')
-        boxes.append((F(lo),F(hi)))
+        boxes.append((lo,hi))
     ans=[]
     for expr,direction in zip(model.objectives,model.directions):
         check_deadline(deadline,clock)
-        lo=hi=F(0)
+        lo=hi=0
         for key,coefficient in expr.terms.items():
-            check_deadline(deadline,clock);a=number(coefficient)
-            if not key:tl=tu=F(1)
+            check_deadline(deadline,clock);a=coefficient if type(coefficient) is int else number(coefficient)
+            if not key:tl=tu=1
             elif any(boxes[i] is None for i in key):raise ValueError('No finite objective interval; explicit finite origin and positive scale required')
             elif len(key)==1:tl,tu=boxes[key[0]]
             elif len(key)==2 and key[0]==key[1]:
-                l,u=boxes[key[0]];tl=F(0) if l<=0<=u else min(l*l,u*u);tu=max(l*l,u*u)
+                l,u=boxes[key[0]];tl=0 if l<=0<=u else min(l*l,u*u);tu=max(l*l,u*u)
             elif len(key)==2:
                 l,u=boxes[key[0]];v,w=boxes[key[1]];ps=(l*v,l*w,u*v,u*w);tl,tu=min(ps),max(ps)
             else:raise ValueError('Only quadratic terms supported')
@@ -43,6 +43,23 @@ def default_weights(m,seed):
         raw=[rng.randrange(1,18) for _ in range(m)];total=sum(raw)
         ans.append([str(F(v,total)) for v in raw])
     return ans
+
+def coefficient_units(model):
+    """Optional fixed units for unbounded boxes; never claim objective bounds.
+
+    An origin equal to the objective constant and an L1 coefficient scale make
+    this deterministic and invariant to positive rescaling of an objective.
+    These units guide search; they do not restrict the variable domains.
+    """
+    origins=[];scales=[];coordinates=[]
+    for expr,direction in zip(model.objectives,model.directions):
+        sign=1 if direction=='min' else -1
+        origins.append(str(sign*expr.terms.get((),0)))
+        scales.append(str(sum(abs(a) for key,a in expr.terms.items() if key) or 1))
+        coordinates.append(dict(L=None,U=None,unit='internal objective coefficient units',
+                                scale_kind='coefficient_l1',lower_bound_status='unproved',
+                                proof='fixed coefficient units; no objective bound asserted'))
+    return dict(origin_internal=origins,scale=scales,coordinates=coordinates)
 
 def make_spec(model,seed=20260930,explicit=None,deadline=float('inf')):
     m=len(model.objectives)
@@ -62,16 +79,17 @@ def make_spec(model,seed=20260930,explicit=None,deadline=float('inf')):
         coords=explicit['coordinates'];algorithm='explicit-frozen-units-v1'
         if not isinstance(coords,list) or len(coords)!=m:raise ValueError('Coordinate provenance dimension')
     weights=default_weights(m,seed)
-    provenance=dict(algorithm=algorithm,coordinates=coords,model_fingerprint=model.fingerprint(),source_sha256=model.source['sha256'],
+    fingerprint=model.fingerprint()
+    provenance=dict(algorithm=algorithm,coordinates=coords,model_fingerprint=fingerprint,source_sha256=model.source['sha256'],
                     normalization_sha256=content_hash(norm),weights_sha256=content_hash(weights))
-    return dict(schema=SCHEMA,model_fingerprint=model.fingerprint(),source_sha256=model.source['sha256'],objective_directions=model.directions,
+    return dict(schema=SCHEMA,model_fingerprint=fingerprint,source_sha256=model.source['sha256'],objective_directions=model.directions,
                 normalization=norm,weights=weights,normalization_provenance=provenance)
 
-def validate_provenance(spec,model,origin,scale,deadline=float('inf'),clock=time.monotonic):
+def validate_provenance(spec,model,origin,scale,deadline=float('inf'),clock=time.monotonic,fingerprint=None):
     p=spec['normalization_provenance'];m=len(origin)
     keys={'algorithm','coordinates','model_fingerprint','source_sha256','normalization_sha256','weights_sha256'}
     if not isinstance(p,dict) or set(p)!=keys:raise ValueError('Invalid normalization provenance')
-    if (p['model_fingerprint']!=model.fingerprint() or p['source_sha256']!=model.source['sha256'] or
+    if (p['model_fingerprint']!=(fingerprint or model.fingerprint()) or p['source_sha256']!=model.source['sha256'] or
         p['normalization_sha256']!=content_hash(spec['normalization']) or p['weights_sha256']!=content_hash(spec['weights'])):
         raise ValueError('Normalization provenance/content mismatch')
     coords=p['coordinates']

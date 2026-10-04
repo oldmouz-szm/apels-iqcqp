@@ -1735,7 +1735,7 @@ namespace solver
         // return state;
 
         Float bound = pcon->bound;
-        Float state;
+        Float state = 0;
         bool is_post_sat;
         if (pcon->is_equal) 
         {
@@ -1784,8 +1784,10 @@ namespace solver
         Float bound = pcon->bound;
         if (pcon->is_equal) 
         {
-            if (var_delta + pcon->value >= bound -eb || var_delta + pcon->value <= bound + eb) return 0;
-            else return - fabs(bound - (var_delta + pcon->value)) + fabs(bound - pcon->value);
+            // Score is the reduction in distance outside the tolerance band.
+            const Float before = std::max(Float(0), fabs(bound - pcon->value) - eb);
+            const Float after = std::max(Float(0), fabs(bound - con_delta) - eb);
+            return before - after;
         }
         int more_flag;
         if (var_delta > 0) more_flag = 1;

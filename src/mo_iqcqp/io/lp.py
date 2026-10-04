@@ -57,9 +57,9 @@ def expression(tokens, register, deadline=float('inf'), max_expression_terms=500
         if t=='[':
             if block is not None or sign!=1:raise ParseError('Nested/signed brackets not supported')
             block=Expr();i+=1;need_sign=False;continue
-        coeff=F(sign)
+        coeff=sign
         if NUMBER.fullmatch(t):
-            coeff*=F(t);i+=1
+            coeff*=int(t) if t.isdigit() else F(t);i+=1
             t=tokens[i] if i<len(tokens) else ''
         key=()
         if NAME.fullmatch(t):

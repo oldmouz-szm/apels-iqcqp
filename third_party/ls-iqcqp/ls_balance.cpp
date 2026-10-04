@@ -188,7 +188,7 @@ namespace solver
             if (li_var_idx != var_idx_2)
                 coeff_value += _cur_assignment[li_var_idx] * li_var_coeff;
             else
-                both_coeff = li_var_coeff;
+                both_coeff += li_var_coeff;
         }
         coeff_value = change_value_1 * coeff_value;
         for (int linear_pos = 0; linear_pos < var_2->obj_linear_coeff.size(); linear_pos++)
@@ -231,7 +231,7 @@ namespace solver
             if (li_var_idx != var_idx_2)
                 linear_coeff_value_1 += _cur_assignment[li_var_idx] * li_var_coeff;
             else 
-                both_coeff = li_var_coeff;
+                both_coeff += li_var_coeff;
         }
         linear_coeff_value_1 *= change_value_1; 
         for (int linear_pos = 0; linear_pos < coeff_2->obj_linear_coeff.size(); linear_pos++)
@@ -821,7 +821,7 @@ namespace solver
                             _obj_vars_in_unbounded_constraint.insert(var_pos);
                         }
                     }
-                    else if (best_value = INT32_MIN)
+                    else if (best_value == INT32_MIN)
                     {
                         best_value = -1;
                         if (check_var_shift(var_pos, best_value, false))

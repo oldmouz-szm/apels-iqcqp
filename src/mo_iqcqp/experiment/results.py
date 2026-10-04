@@ -1,12 +1,13 @@
 """Integrity of saved artifacts and independent checks before queue reuse."""
 import hashlib
 import json
+import time
 from fractions import Fraction
 from pathlib import Path
 
 SCHEMA = 'apels-result-content-v1'
 STATUSES = {'COMPLETED','ERROR','INTERRUPTED','HARD_TIMEOUT',
-            'RESOURCE_TREE_RSS_LIMIT','RESOURCE_HOST_MEMORY_PRESSURE','CHECKPOINT'}
+            'RESOURCE_TREE_RSS_LIMIT','RESOURCE_HOST_MEMORY_PRESSURE','RESOURCE_ADDRESS_SPACE_LIMIT','CHECKPOINT'}
 
 def digest(data):
     payload = {k:v for k,v in data.items() if k != 'result_integrity'}
@@ -26,7 +27,7 @@ def intact(data):
     except (ValueError,TypeError,OverflowError):
         return False
 
-def validate_samples(result, source, caps):
+def validate_samples(result, source, caps, deadline=float('inf')):
     """Recompute stored coordinates; never trust a checksum as feasibility proof."""
     from mo_iqcqp.io import load_lp
     if not isinstance(result, dict):
@@ -37,14 +38,14 @@ def validate_samples(result, source, caps):
     if not points:
         return True
     try:
-        model = load_lp(source, **caps)
+        model = load_lp(source, deadline=deadline, **caps)
         if not isinstance(result.get('model_source'),dict) or result['model_source'].get('sha256') != model.source['sha256']:
             return False
         if result.get('variable_names') != [v.name for v in model.variables]:
             return False
         vectors = []
         for point in points:
-            checked = model.validate(point['x'])
+            checked = model.validate(point['x'],deadline=deadline)
             if not checked['valid']:
                 return False
             for key in ('original','internal'):
@@ -52,19 +53,20 @@ def validate_samples(result, source, caps):
                 if len(values) != len(model.objectives) or tuple(map(Fraction,values)) != tuple(checked[key]):
                     return False
             at = point.get('validated_by_elapsed')
-            if at is not None and not 0 <= at < result['budget']:
+            if type(at) not in (int,float) or not 0 <= at < result['budget']:
                 return False
             v = tuple(checked['internal'])
             for previous in vectors:
+                if time.monotonic()>=deadline:raise TimeoutError('result verification deadline')
                 # Weak dominance also rejects duplicate objective vectors.
                 if all(a<=b for a,b in zip(previous,v)) or all(a<=b for a,b in zip(v,previous)):
                     return False
             vectors.append(v)
         return True
-    except (ValueError,TypeError,KeyError,OSError,ArithmeticError):
+    except (ValueError,TypeError,KeyError,OSError,ArithmeticError,TimeoutError):
         return False
 
-def read_recovery(path, start, expected, source, caps):
+def read_recovery(path, start, expected, source, caps, deadline=float('inf')):
     """Return a sealed same-invocation artifact with independently valid samples."""
     try:
         result = json.loads(Path(path).read_text())
@@ -73,7 +75,7 @@ def read_recovery(path, start, expected, source, caps):
         for key in ('implementation_fingerprint','algorithm_configuration','protocol','queue_identity'):
             if result.get(key) != expected.get(key):
                 return None
-        if not validate_samples(result,source,caps):
+        if not validate_samples(result,source,caps,deadline):
             return None
         return result
     except (OSError,ValueError,TypeError,MemoryError):

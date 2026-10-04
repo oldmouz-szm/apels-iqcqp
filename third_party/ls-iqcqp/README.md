@@ -1,6 +1,10 @@
 # LS-IQCQP: Local Search for Integer Quadratic Programming
 
-## Description
+## Integration in Apels-IQCQP
+
+These sources retain the upstream license and include local correctness fixes for integer bound clipping, equality scoring, binary inequality preservation, repeated pair coefficients and degenerate search states. Apels-IQCQP uses `scripts/build_native.py` at the repository root to generate deadline-aware persistent step methods, callbacks and process-local randomness. The adapter supplies complete objective/constraint indices; it does not use the standalone LP reader below. Regression sources are in the root `tests/` directory.
+
+## Upstream standalone description
 
 LS-IQCQP is a local search algorithm implementation for solving General Integer Quadratic Programming. The algorithm supports multiple search strategies including greedy strategy and tabu search strategy.
 

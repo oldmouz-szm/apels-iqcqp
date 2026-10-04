@@ -1,4 +1,4 @@
-# apels-iqcqp engineering contract (v11)
+# Apels-IQCQP engineering contract (v12)
 
 ## Supported scope
 
@@ -36,19 +36,20 @@ Representative selection maintains each candidate's current minimum distance, re
 
 ## Identity, errors and output
 
-Run protocol is end-to-end-cold-ls-adaptive-v11 and queue schema is queue-run-ls-adaptive-v11. The source/native hashes, actual m, frozen configuration and reward content remain part of identity.
+Run protocol is end-to-end-cold-ls-adaptive-v12 and queue schema is queue-run-ls-adaptive-v12. The source/native hashes, actual m, frozen configuration and reward content remain part of identity.
 
 Final results/checkpoints retain content digests; queue reuse independently validates assignments, objective order/signs, nondominance and event-stream integrity. Single-run abnormal exit codes remain ERROR=2, HARD_TIMEOUT=124, INTERRUPTED=130 and RESOURCE_*=3. No missing metric is represented as a false zero.
 
 The supported installation is a built source checkout, optionally installed editable. A wheel containing only the Python package does not contain the C++ sources/binary and is not a standalone solver distribution.
 
-## Validation
+## Development checks
 
-The independent local engineering delivery contains reproducible regression tests, frozen functional validation and raw audit records. Benchmark inputs and historical experiment results are outside the clean solver repository. Exactness and interface tests do not establish performance superiority, parallel speedup or exhaustive verification of every finite dimension.
+The maintained regression sources are in `tests/`. They create only temporary fixtures and outputs. Run the Python integration suite and compiled native scoring tests using the commands in README.md. ASan/UBSan checks use a separate build artifact. Benchmark datasets, logs and historical experiment reports are kept outside the repository.
 
+## Native invariants
 
-Only adaptive scheduling and LS-IQCQP are shipped. Obsolete configurations fail validation. The v11 identity prevents reuse of earlier results.
+Every scalar monomial is aggregated before constructing objective incidence and per-variable neighbour lists. Constraint binary-member lists are populated by the adapter. Constant constraints never enter repair sampling, and a feasible constant scalar objective yields without entering objective sampling. Constant infeasibility has an explicit stop reason. Integer domains are rounded inward before native transport and moves are rechecked after bound clipping.
 
-## Release acceptance
+Task changes and warm starts share one native rebuild. Exact integers are serialized without an intermediate binary64 conversion. Native assignment output preserves integer JSON tokens. Native floating search remains heuristic; the rational original-model validator is authoritative.
 
-The LS-only v11 cleanup was rebuilt and passed 43 applicable regression tests plus 12 fresh cold functional runs at 2, 3, 4, 5, 8, 10, 20, 50, 100 and 200 objectives, including one, two and four workers. These results are functional evidence, not a performance comparison. Local audit data and test inputs are excluded from this source-only repository.
+The build manifest binds the executable to native sources, local LS-IQCQP changes and build tooling. A stale binary fails visibly. All generated build files stay under `build/`.
